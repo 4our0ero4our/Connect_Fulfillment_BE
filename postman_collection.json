@@ -1,0 +1,378 @@
+{
+  "info": {
+    "name": "Connect Fulfillment - Core Flows",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Gateway Root",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            ""
+          ]
+        }
+      }
+    },
+    {
+      "name": "Gateway Health",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/health",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Register Company",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:4000/auth/register",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "auth",
+            "register"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"name\": \"Test Merchant\", \"email\": \"merchant@example.com\"}"
+        }
+      }
+    },
+    {
+      "name": "Auth Root",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/auth",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "auth"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Auth Health",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/auth/health",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "auth",
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Login Company",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:4000/auth/login",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"email\": \"merchant@example.com\", \"password\": \"password\"}"
+        }
+      }
+    },
+    {
+      "name": "Create Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "x-api-key",
+            "value": "REPLACE_API_KEY"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:4000/order",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "order"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"externalOrderId\": \"ext-123\", \"items\": [{\"sku\": \"sku-1\", \"qty\": 1, \"price\": 100}], \"email\": \"buyer@example.com\"}"
+        }
+      }
+    },
+    {
+      "name": "Order Root",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/order",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "order"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Order Health",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/order/health",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "order",
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Order By Id",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/order/:id",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "order",
+            ":id"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Validate Ticket",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:4000/ticket/validate",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "ticket",
+            "validate"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"code\": \"REPLACE_TICKET_CODE\"}"
+        }
+      }
+    },
+    {
+      "name": "Ticket Root",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/ticket",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "ticket"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Ticket Health",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/ticket/health",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "ticket",
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Company Root",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/company",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "company"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Company Health",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/company/health",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "company",
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Notification Root",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/notify",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "notify"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Notification Health",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:4000/notify/health",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "notify",
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Send Notification",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:4000/notify/send",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4000",
+          "path": [
+            "notify",
+            "send"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"to\": \"user@example.com\", \"subject\": \"Hello\", \"body\": \"Test\"}"
+        }
+      }
+    }
+  ]
+}

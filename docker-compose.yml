@@ -1,0 +1,110 @@
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+
+  mongodb:
+    image: mongo:6.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "4000:4000"
+    depends_on:
+      - auth-service
+      - order-service
+      - ticket-service
+    environment:
+      - NODE_ENV=development
+
+  auth-service:
+    build: ./services/auth-service
+    ports:
+      - "4001:4001"
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/auth
+      - REDIS_URL=redis://redis:6379
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      - mongodb
+      - redis
+      - kafka
+
+  order-service:
+    build: ./services/order-service
+    ports:
+      - "4002:4002"
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/orders
+      - KAFKA_BROKERS=kafka:9092
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - mongodb
+      - kafka
+      - redis
+
+  ticket-service:
+    build: ./services/ticket-service
+    ports:
+      - "4003:4003"
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/tickets
+      - KAFKA_BROKERS=kafka:9092
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - mongodb
+      - kafka
+      - redis
+
+  company-service:
+    build: ./services/company-service
+    ports:
+      - "4004:4004"
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/companies
+      - KAFKA_BROKERS=kafka:9092
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - mongodb
+      - kafka
+      - redis
+
+  notification-service:
+    build: ./services/notification-service
+    ports:
+      - "4005:4005"
+    environment:
+      - SMTP_HOST=smtp.example.com
+      - SMTP_USER=example
+    depends_on:
+      - kafka
+
+volumes:
+  mongo-data:
+
