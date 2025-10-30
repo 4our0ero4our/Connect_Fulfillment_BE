@@ -1,0 +1,24 @@
+{
+  "name": "connect-fulfillmenet-be",
+  "version": "1.0.0",
+  "description": "Run `docker compose up --build` to bring up the dev environment.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/4our0ero4our/Connect-Fulfillmenet-BE.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/4our0ero4our/Connect-Fulfillmenet-BE/issues"
+  },
+  "homepage": "https://github.com/4our0ero4our/Connect-Fulfillmenet-BE#readme",
+  "dependencies": {
+    "dotenv": "^17.2.3"
+  }
+}

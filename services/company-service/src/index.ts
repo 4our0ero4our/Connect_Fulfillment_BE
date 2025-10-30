@@ -1,6 +1,7 @@
 import express from 'express';
 import companyRoute from './routes/companyRoute';
 import { Request, Response } from 'express';
+
 const app = express();
 
 app.use(express.json());

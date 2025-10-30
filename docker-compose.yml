@@ -7,6 +7,8 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
+    networks:
+      - app-network
 
   kafka:
     image: confluentinc/cp-kafka:7.4.0
@@ -19,6 +21,8 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     ports:
       - "9092:9092"
+    networks:
+      - app-network
 
   mongodb:
     image: mongo:6.0
@@ -26,11 +30,15 @@ services:
       - "27017:27017"
     volumes:
       - mongo-data:/data/db
+    networks:
+      - app-network
 
   redis:
     image: redis:7
     ports:
       - "6379:6379"
+    networks:
+      - app-network
 
   api-gateway:
     build: ./api-gateway
@@ -40,60 +48,80 @@ services:
       - auth-service
       - order-service
       - ticket-service
+      - company-service
+      - notification-service
     environment:
       - NODE_ENV=development
+    networks:
+      - app-network
 
   auth-service:
     build: ./services/auth-service
     ports:
       - "4001:4001"
     environment:
-      - MONGO_URI=mongodb://mongodb:27017/auth
+      - MONGO_URI=${AUTH_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/Admin?appName=404Cluster}
       - REDIS_URL=redis://redis:6379
       - KAFKA_BROKERS=kafka:9092
+      - JWT_SECRET=${JWT_SECRET:-wanna_know_what_this_is_yeah_fuck_off_man}
+      - STAFF_EMAILS_COLLECTION=${STAFF_EMAILS_COLLECTION:-admin@connectfulfillment.com,manager@connectfulfillment.com,support@connectfulfillment.com,admin@connectfulfillment.co.uk}
     depends_on:
       - mongodb
       - redis
       - kafka
+    networks:
+      - app-network
 
   order-service:
     build: ./services/order-service
     ports:
       - "4002:4002"
     environment:
-      - MONGO_URI=mongodb://mongodb:27017/orders
+      # MongoDB Atlas: Same cluster, different database
+      # Define ORDER_MONGO_URI in your .env file
+      - MONGO_URI=${ORDER_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/OrderDB?appName=404Cluster}
       - KAFKA_BROKERS=kafka:9092
       - REDIS_URL=redis://redis:6379
     depends_on:
       - mongodb
       - kafka
       - redis
+    networks:
+      - app-network
 
   ticket-service:
     build: ./services/ticket-service
     ports:
       - "4003:4003"
     environment:
-      - MONGO_URI=mongodb://mongodb:27017/tickets
+      # MongoDB Atlas: Same cluster, different database
+      # Define TICKET_MONGO_URI in your .env file
+      - MONGO_URI=${TICKET_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/TicketDB?appName=404Cluster}
       - KAFKA_BROKERS=kafka:9092
       - REDIS_URL=redis://redis:6379
     depends_on:
       - mongodb
       - kafka
       - redis
+    networks:
+      - app-network
 
   company-service:
     build: ./services/company-service
     ports:
       - "4004:4004"
     environment:
-      - MONGO_URI=mongodb://mongodb:27017/companies
+      # MongoDB Atlas: Same cluster, different database
+      # Define COMPANY_MONGO_URI in your .env file
+      - MONGO_URI=${COMPANY_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/CompanyDB?appName=404Cluster}
       - KAFKA_BROKERS=kafka:9092
       - REDIS_URL=redis://redis:6379
     depends_on:
       - mongodb
       - kafka
       - redis
+    networks:
+      - app-network
 
   notification-service:
     build: ./services/notification-service
@@ -104,7 +132,13 @@ services:
       - SMTP_USER=example
     depends_on:
       - kafka
+    networks:
+      - app-network
 
 volumes:
   mongo-data:
+
+networks:
+  app-network:
+    driver: bridge
 
