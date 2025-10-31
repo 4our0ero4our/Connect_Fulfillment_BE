@@ -6,19 +6,21 @@ export const validateApiKey = async (req: Request, res: Response, next: NextFunc
     const apiKey = req.headers['your_company_api_key'] as string;
 
     if (!apiKey) {
-      return res.status(401).json({ error: 'Company API key is required' });
+      return res.status(401).json({ error: 'API key validation failed: Company API key is required' });
     }
 
-    // Call company-service to verify the key
+    // Calls company-service to verify the API key
     const response = await axios.get(`http://company-service:4004/verify-key`, {
       headers: { 'your_company_api_key': apiKey },
     });
 
     if (!response.data.valid) {
-      return res.status(403).json({ error: 'Invalid Company API key' });
+      return res.status(403).json({ error: 'API key validation failed: Invalid Company API key' });
     }
-
-    req.body.company = response.data.company;
+  
+    console.log('Company API key is valid', response.data.company);
+    // Attaches company details to response locals
+    res.locals.company = response.data.company ? response.data.company : 'No company details found';
 
     next();
   } catch (error: any) {

@@ -305,10 +305,3 @@ router.get('/profile', verifyToken, (req: Request, res: Response) => {
 });
 
 export default router;
-
-// Default Admin Account in the database details:
-// {
-//   "adminName": "John Admin",
-//   "adminEmail": "admin@connectfulfillment.com",
-//   "password": "AdminPass123!"
-// }

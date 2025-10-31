@@ -9,6 +9,7 @@ yarn-error.log*
 .env.local
 .env.production
 .env.test
+.env.example
 
 # Build outputs
 dist/
@@ -55,6 +56,7 @@ Thumbs.db
 
 # Docker
 .dockerignore
+.docker-compose.yml
 
 # Temporary files
 tmp/

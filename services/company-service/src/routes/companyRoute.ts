@@ -18,7 +18,7 @@ router.post('/register', async (req: Request, res: Response) => {
   }
 })
 
-router.get('/companies', async (req: Request, res: Response) => {
+router.get('/companies', async (_req: Request, res: Response) => {
   // if (!req.body.company) return res.status(401).json({ message: 'Unauthorized' });
   const companies = await Company.find();
   res.status(200).json({ companies });
@@ -26,11 +26,11 @@ router.get('/companies', async (req: Request, res: Response) => {
 
 router.get('/verify-key', async (req: Request, res: Response) => {
   const apiKey = req.headers['your_company_api_key'] as string;
-  if (!apiKey) return res.json({ valid: false });
+  if (!apiKey) return res.json({ valid: false, error: 'API key validation failed: Company API key is required' });
 
-  // Fake API key from the environment variable for testing purposes
-  const fakeApiKey = process.env.FAKE_API_KEY as string;
-  if (apiKey === fakeApiKey) return res.json({ valid: true, company: { companyName: 'Test Company', companyEmail: 'test@test.com', companyAddress: '123 Test St, Test City, Test Country', companyPhone: 1234567890, companyWebsite: 'https://test.com', companyLogo: 'https://test.com/logo.png', companyDescription: 'Test Description', companyCategory: 'Test Category', companySubCategory: 'Test SubCategory', companyApiKey: fakeApiKey } });
+  // TODO: Verify API key based on the company's details in the database.
+  const demoApiKey = 'demo-api-key';
+  apiKey === demoApiKey ? res.json({ valid: true, company: { companyName: 'Test Company', companyEmail: 'test@test.com', companyAddress: '123 Test St, Test City, Test Country', companyPhone: 1234567890, companyWebsite: 'https://test.com', companyLogo: 'https://test.com/logo.png', companyDescription: 'Test Description', companyCategory: 'Test Category', companySubCategory: 'Test SubCategory', companyApiKey: demoApiKey } }) : res.json({ valid: false, error: 'API key validation failed: Invalid Company API key' });
 
   // Real API key from the database
   // const company = await Company.findOne({ companyApiKey: apiKey });

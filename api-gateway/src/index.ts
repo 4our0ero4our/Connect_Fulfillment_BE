@@ -65,10 +65,11 @@ const notificationProxy: RequestHandler = createProxyMiddleware({
   pathRewrite: { '^/notify': '' }
 });
 
-// Root endpoint (no API key required)
-app.get('/', (req: Request, res: Response) => {
+// Root endpoint (to confirm API key is valid)
+app.get('/', validateApiKey, (_req: Request, res: Response) => {
   res.json({ 
-    message: 'Hello World from the Connect Fulfillment API Gateway. Seeing this message means your API KEY is valid and the API Gateway is working correctly. Congratulations!',
+    message: `Hello ${res.locals.company.companyName}. Congratulations on successfully integrating your API with the Connect Fulfillment API Gateway. Seeing this message means your API KEY is valid and the API Gateway is working correctly.`,
+    companyDetails: res.locals.company ? res.locals.company : 'No company details found',
     services: ['/auth', '/order', '/ticket', '/company', '/notify'],
     health: '/health',
     timestamp: new Date().toISOString(),
