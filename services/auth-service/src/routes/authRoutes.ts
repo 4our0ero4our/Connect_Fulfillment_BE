@@ -208,7 +208,7 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Validate email format
+    // Validates email format
     if (!isValidEmailFormat(adminEmail)) {
       return res.status(400).json({
         message: 'Invalid email format',
@@ -216,7 +216,7 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Validate company email
+    // Validates company email
     if (!(await isValidCompanyEmail(adminEmail))) {
       return res.status(403).json({
         message: 'Access denied',
@@ -224,7 +224,7 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Find admin by email
+    // Finds admin by email
     const admin = await Admin.findOne({ adminEmail: adminEmail.toLowerCase() });
     if (!admin) {
       return res.status(401).json({
@@ -233,11 +233,11 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Verify password
+    // Verifies password
     const isPasswordValid = await bcrypt.compare(password, admin.password || '');
-    if (!isPasswordValid) return res.status(401).json({ message: 'Invalid credentials', error: 'Incorrect password' });
+    !isPasswordValid && res.status(401).json({ message: 'Invalid credentials', error: 'Incorrect password' });
 
-    // Generate JWT token
+    // Generates JWT token
     const token = jwt.sign(
       {
         adminId: admin._id,

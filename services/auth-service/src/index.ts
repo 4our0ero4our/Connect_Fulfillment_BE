@@ -1,9 +1,6 @@
-// TODO: Admin Reset Password Route
 // TODO: Check the Admin Login Route to see if it's working properly.
+// TODO: Admin Reset Password Route
 // TODO: Add a route to check if the admin is logged in and if the token is valid.
-
-
-
 import express from 'express';
 import mongoose from 'mongoose';
 import authRoutes from './routes/authRoutes';
