@@ -60,7 +60,7 @@ services:
     ports:
       - "4001:4001"
     environment:
-      - MONGO_URI=${AUTH_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/Admin?appName=404Cluster}
+      - MONGO_URI=${AUTH_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/AdminDB?appName=404Cluster}
       - REDIS_URL=redis://redis:6379
       - KAFKA_BROKERS=kafka:9092
       - JWT_SECRET=${JWT_SECRET:-wanna_know_what_this_is_yeah_fuck_off_man}

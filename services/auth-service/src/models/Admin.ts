@@ -15,8 +15,8 @@ const AdminSchema: Schema = new Schema<IAdmin>(
   {
     _id: { type: Schema.Types.ObjectId, default: new mongoose.Types.ObjectId() },
     adminName: { type: String, required: false },
-    adminEmail: { type: String, required: false, unique: true, lowercase: true, match: [/^\S+@\S+\.\S+$/, 'Please enter a valid email address'] },
-    password: { type: String, required: false, minlength: 8, match: [/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/, 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character'] },
+    adminEmail: { type: String, required: true, unique: true, lowercase: true, match: [/^\S+@\S+\.\S+$/, 'Please enter a valid email address'] },
+    password: { type: String, required: true },
   },
   { timestamps: true, collection: 'admins' }
 );

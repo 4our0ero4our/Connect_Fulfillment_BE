@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Request, Response } from 'express';
 import { Admin } from '../models/Admin';
+import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
@@ -10,22 +11,34 @@ const router = Router();
 dotenv.config({ path: '.env' });
 dotenv.config({ path: './.env' });
 dotenv.config(); // Also try default .env in root
-
-const staffEmails = ['admin@connectfulfillment.com', 'manager@connectfulfillment.com', 'support@connectfulfillment.com', 'admin@connectfulfillment.co.uk'];
   
-// Helper function to validate company email
-const isValidCompanyEmail = (email: string): boolean => {
-  const trimmedEmails: string[] = staffEmails.map((email: string) => email.toLowerCase().trim());
-  return trimmedEmails.some(trimmedEmail => trimmedEmail === email.toLowerCase().trim());
+// Validates company email by checking if the email is in the staffs collection in the database.
+const isValidCompanyEmail = async (email: string): Promise<boolean> => {
+  const mongoURI = process.env.MONGO_URI!;
+  let isConnected: boolean = false;
+  await mongoose.connect(mongoURI, {
+      serverSelectionTimeoutMS: 10000, // 10 seconds
+      socketTimeoutMS: 45000, // 45 seconds
+      bufferCommands: false
+    });
+  isConnected = true;
+  if (!isConnected) {
+    throw new Error('Failed to connect to MongoDB');
+  }
+  const staffsCollection = mongoose.connection.collection('staffs');
+  const staff = await staffsCollection.findOne({ email: email });
+  // mongoose.disconnect();
+  // isConnected = false;
+  return staff ? true : false;
 };
 
-// Helper function to validate email format
+// Validates email format
 const isValidEmailFormat = (email: string): boolean => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
 };
 
-// Helper function to validate password strength
+// Validates password strength
 const isValidPassword = (password: string): boolean => {
   const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
   return passwordRegex.test(password);
@@ -69,7 +82,7 @@ router.post('/register', async (req: Request, res: Response) => {
     }
 
     // Validate company email
-    if (!isValidCompanyEmail(adminEmail)) {
+    if (!(await isValidCompanyEmail(adminEmail))) {
       console.log('❌ Invalid company email:', adminEmail);
       return res.status(403).json({
         message: 'Access denied',
@@ -102,7 +115,7 @@ router.post('/register', async (req: Request, res: Response) => {
     const hashedPassword = await bcrypt.hash(password, 12);
 
     // Create admin
-    console.log('👤 Creating admin in database...');
+    console.log('📝 Creating admin in database...');
     const admin = await Admin.create({
       adminName,
       adminEmail: adminEmail.toLowerCase(),
@@ -146,7 +159,7 @@ router.post('/register', async (req: Request, res: Response) => {
       adminEmail: req.body?.adminEmail
     });
 
-    // Handle MongoDB duplicate key error
+    // Handles MongoDB duplicate key error
     if (error.code === 11000) {
       console.log('❌ Duplicate key error - admin already exists');
       return res.status(409).json({
@@ -155,7 +168,7 @@ router.post('/register', async (req: Request, res: Response) => {
       });
     }
 
-    // Handle MongoDB connection errors
+    // Handles MongoDB connection errors
     if (error.name === 'MongoNetworkError' || error.name === 'MongoTimeoutError') {
       console.log('❌ MongoDB connection error');
       return res.status(503).json({
@@ -164,7 +177,7 @@ router.post('/register', async (req: Request, res: Response) => {
       });
     }
 
-    // Handle validation errors
+    // Handles validation errors
     if (error.name === 'ValidationError') {
       console.log('❌ Validation error:', error.message);
       return res.status(400).json({
@@ -204,7 +217,7 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     // Validate company email
-    if (!isValidCompanyEmail(adminEmail)) {
+    if (!(await isValidCompanyEmail(adminEmail))) {
       return res.status(403).json({
         message: 'Access denied',
         error: 'Only Connect Fulfillment staff emails are allowed to login'
