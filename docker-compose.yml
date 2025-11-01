@@ -77,8 +77,6 @@ services:
     ports:
       - "4002:4002"
     environment:
-      # MongoDB Atlas: Same cluster, different database
-      # Define ORDER_MONGO_URI in your .env file
       - MONGO_URI=${ORDER_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/OrderDB?appName=404Cluster}
       - KAFKA_BROKERS=kafka:9092
       - REDIS_URL=redis://redis:6379

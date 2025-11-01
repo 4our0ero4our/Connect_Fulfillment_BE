@@ -14,21 +14,8 @@ dotenv.config(); // Also try default .env in root
   
 // Validates company email by checking if the email is in the staffs collection in the database.
 const isValidCompanyEmail = async (email: string): Promise<boolean> => {
-  const mongoURI = process.env.MONGO_URI!;
-  let isConnected: boolean = false;
-  await mongoose.connect(mongoURI, {
-      serverSelectionTimeoutMS: 10000, // 10 seconds
-      socketTimeoutMS: 45000, // 45 seconds
-      bufferCommands: false
-    });
-  isConnected = true;
-  if (!isConnected) {
-    throw new Error('Failed to connect to MongoDB');
-  }
   const staffsCollection = mongoose.connection.collection('staffs');
   const staff = await staffsCollection.findOne({ email: email });
-  // mongoose.disconnect();
-  // isConnected = false;
   return staff ? true : false;
 };
 
@@ -235,7 +222,9 @@ router.post('/login', async (req: Request, res: Response) => {
 
     // Verifies password
     const isPasswordValid = await bcrypt.compare(password, admin.password || '');
-    !isPasswordValid && res.status(401).json({ message: 'Invalid credentials', error: 'Incorrect password' });
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: 'Invalid credentials', error: 'Incorrect password' });
+    }
 
     // Generates JWT token
     const token = jwt.sign(
@@ -304,4 +293,49 @@ router.get('/profile', verifyToken, (req: Request, res: Response) => {
   });
 });
 
+router.post('/change-password', async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const { adminEmail, currentPassword, newPassword } = req.body;
+
+    // Validation checks
+    if (!adminEmail || !currentPassword || !newPassword) {
+      return res.status(400).json({
+        message: 'All fields are required',
+        errors: {
+          adminEmail: !adminEmail ? 'Admin email is required' : null,
+          currentPassword: !currentPassword ? 'Current password is required' : null,
+          newPassword: !newPassword ? 'New password is required' : null
+        }
+      });
+    }
+
+    // Validates email format
+    if (!isValidEmailFormat(adminEmail)) {
+      return res.status(400).json({
+        message: 'Invalid email format',
+        error: 'Please enter a valid email address'
+      });
+    }
+
+  // Finds admin by email
+  const admin = await Admin.findOne({ adminEmail: adminEmail.toLowerCase() });
+  if (!admin) {
+    return res.status(401).json({ message: 'Invalid credentials', error: 'No admin with this email was found' });
+  }
+  const isPasswordValid = await bcrypt.compare(currentPassword, admin.password || '');
+  if (!isPasswordValid) {
+    return res.status(401).json({ message: 'Invalid credentials', error: 'The current password you provided is incorrect' });
+  }
+  const newPasswordStrength = isValidPassword(newPassword);
+  if (!newPasswordStrength) {
+    return res.status(400).json({ message: 'Invalid password', error: 'The new password you provided does not meet the requirements' });
+  }
+  const hashedNewPassword = await bcrypt.hash(newPassword, 12);
+  admin.password = hashedNewPassword;
+  await admin.save();
+  return res.status(200).json({ message: 'Your password has been changed successfully. Please login with your new password.' });
+} catch (error: any) {
+    return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
 export default router;

@@ -70,7 +70,7 @@ app.get('/', validateApiKey, (_req: Request, res: Response) => {
   res.json({ 
     message: `Hello ${res.locals.company.companyName}. Congratulations on successfully integrating your API with the Connect Fulfillment API Gateway. Seeing this message means your API KEY is valid and the API Gateway is working correctly.`,
     companyDetails: res.locals.company ? res.locals.company : 'No company details found',
-    services: ['/auth', '/order', '/ticket', '/company', '/notify'],
+    services: [{ name: 'auth', url: '/auth', description: 'Authentication Service' }, { name: 'order', url: '/order', description: 'Order Service' }, { name: 'ticket', url: '/ticket', description: 'Ticket Service' }, { name: 'company', url: '/company', description: 'Company Service' }, { name: 'notify', url: '/notify', description: 'Notification Service' }],
     health: '/health',
     timestamp: new Date().toISOString(),
     service: 'api-gateway',
