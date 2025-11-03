@@ -5,20 +5,22 @@ import { validateApiKey } from './middleware/apiKeyValidator';
 
 const app = express();
 
-// Add timeout middleware
+// Timeout middleware
 app.use((req, res, next) => {
-  req.setTimeout(30000); // 30 seconds
-  res.setTimeout(30000); // 30 seconds
+  req.setTimeout(30000); 
+  res.setTimeout(30000); 
   next();
 });
 
+// ✅ Working perfectly
+// Auth service proxy
 const authProxy: RequestHandler = createProxyMiddleware({ 
   target: process.env.AUTH_SERVICE_URL as string || 'http://auth-service:4001', 
   changeOrigin: true,
   pathRewrite: { '^/auth': '' },
-  timeout: 30000, // 30 seconds timeout
-  proxyTimeout: 30000, // 30 seconds proxy timeout
-  onError: (err, req, res) => {
+  timeout: 30000, // timeout
+  proxyTimeout: 30000, // proxy timeout
+  onError: (err, _req, res) => {
     console.error('Auth service proxy error:', err.message);
     res.status(503).json({ 
       error: 'Auth service unavailable', 
@@ -65,10 +67,11 @@ const notificationProxy: RequestHandler = createProxyMiddleware({
   pathRewrite: { '^/notify': '' }
 });
 
+// ✅ Working perfectly
 // Root endpoint (to confirm API key is valid)
 app.get('/', validateApiKey, (_req: Request, res: Response) => {
   res.json({ 
-    message: `Hello ${res.locals.company.companyName}. Congratulations on successfully integrating your API with the Connect Fulfillment API Gateway. Seeing this message means your API KEY is valid and the API Gateway is working correctly.`,
+    message: `Hello ${res.locals.company?.companyName}. Congratulations on successfully integrating your API with the Connect Fulfillment API Gateway. Seeing this message means your API KEY is valid and the API Gateway is working correctly.`,
     companyDetails: res.locals.company ? res.locals.company : 'No company details found',
     services: [{ name: 'auth', url: '/auth', description: 'Authentication Service' }, { name: 'order', url: '/order', description: 'Order Service' }, { name: 'ticket', url: '/ticket', description: 'Ticket Service' }, { name: 'company', url: '/company', description: 'Company Service' }, { name: 'notify', url: '/notify', description: 'Notification Service' }],
     health: '/health',
@@ -77,11 +80,15 @@ app.get('/', validateApiKey, (_req: Request, res: Response) => {
   });
 });
 
-// Health check endpoint (no API key required)
-app.get('/health', (_req: Request, res: Response) => res.json({ status: 'ok' , timestamp: new Date().toISOString(), service: 'api-gateway' }));
+// ✅ Working perfectly
+// Root health check endpoint (no API key required)
+app.get('/health', (_req: Request, res: Response) => res.json({ status:'ok' , timestamp: new Date().toISOString(), service: 'api-gateway' }));
 
+// ✅ Working perfectly
+// Auth service route (no API key required)
 app.use('/auth', authProxy);
-// Service routes (all protected by validateApiKey middleware)
+
+// Services routes that are protected by validateApiKey middleware (API key validation)
 app.use('/order', validateApiKey, orderProxy);
 app.use('/ticket', validateApiKey, ticketProxy);
 app.use('/company', validateApiKey, companyProxy);

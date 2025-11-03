@@ -31,10 +31,14 @@ const isValidPassword = (password: string): boolean => {
   return passwordRegex.test(password);
 };
 
+// ✅ Working perfectly
+// Root endpoint (to confirm that Auth service is running)
 router.get('/', (_req: Request, res: Response) => {
   res.json({ message: 'Auth Service is running', service: 'auth-service' });
 });
 
+// ✅ Working perfectly
+// Register endpoint (to register a new admin)
 router.post('/register', async (req: Request, res: Response) => {
   const startTime = Date.now();
   console.log('🔄 Registration request received:', { 
@@ -180,6 +184,8 @@ router.post('/register', async (req: Request, res: Response) => {
   }
 });
 
+// ✅ Working perfectly
+// Login endpoint (to login an admin)
 router.post('/login', async (req: Request, res: Response) => {
   try {
     const { adminEmail, password } = req.body;
@@ -256,6 +262,7 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
+// ✅ Working perfectly
 // Middleware to verify JWT token
 export const verifyToken = (req: Request, res: Response, next: any) => {
   try {
@@ -281,7 +288,22 @@ export const verifyToken = (req: Request, res: Response, next: any) => {
   }
 };
 
-// Protected route example
+// ✅ Working perfectly
+// Logout endpoint (clients should delete their JWT on logout)
+router.get('/logout', verifyToken, (_req: Request, res: Response) => {
+  // Removes the JWT from the client's browser
+  res.clearCookie('token');
+  res.clearCookie('connect.sid');
+  res.clearCookie('session');
+  res.clearCookie('sessionid');
+  res.clearCookie('auth');
+  res.clearCookie('auth-token');
+  return res.status(200).json({ message: 'Logout successful' });
+});
+
+
+// ✅ Working perfectly
+// Protected route example to conform that verifyToken Middleware works
 router.get('/profile', verifyToken, (req: Request, res: Response) => {
   res.json({
     message: 'Admin profile',
@@ -293,6 +315,8 @@ router.get('/profile', verifyToken, (req: Request, res: Response) => {
   });
 });
 
+// ✅ Working perfectly
+// Change password endpoint (to change an admin's password)
 router.post('/change-password', async (req: Request, res: Response): Promise<Response> => {
   try {
     const { adminEmail, currentPassword, newPassword } = req.body;
@@ -323,13 +347,16 @@ router.post('/change-password', async (req: Request, res: Response): Promise<Res
     return res.status(401).json({ message: 'Invalid credentials', error: 'No admin with this email was found' });
   }
   const isPasswordValid = await bcrypt.compare(currentPassword, admin.password || '');
+  // Verifies current password
   if (!isPasswordValid) {
     return res.status(401).json({ message: 'Invalid credentials', error: 'The current password you provided is incorrect' });
   }
+  // Validates new password strength
   const newPasswordStrength = isValidPassword(newPassword);
   if (!newPasswordStrength) {
     return res.status(400).json({ message: 'Invalid password', error: 'The new password you provided does not meet the requirements' });
   }
+  // Hashes new password
   const hashedNewPassword = await bcrypt.hash(newPassword, 12);
   admin.password = hashedNewPassword;
   await admin.save();
