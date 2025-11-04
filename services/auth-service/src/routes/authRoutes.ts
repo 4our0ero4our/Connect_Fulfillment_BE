@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import rateLimit from '../middleware/rateLimit';
 
 const router = Router();
 // Try multiple paths for .env file (works in both local and Docker)
@@ -39,7 +40,7 @@ router.get('/', (_req: Request, res: Response) => {
 
 // ✅ Working perfectly
 // Register endpoint (to register a new admin)
-router.post('/register', async (req: Request, res: Response) => {
+router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res: Response) => {
   const startTime = Date.now();
   console.log('🔄 Registration request received:', { 
     adminEmail: req.body?.adminEmail, 
@@ -186,7 +187,7 @@ router.post('/register', async (req: Request, res: Response) => {
 
 // ✅ Working perfectly
 // Login endpoint (to login an admin)
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', rateLimit(5, 60, 'login'), async (req: Request, res: Response) => {
   try {
     const { adminEmail, password } = req.body;
 
@@ -317,7 +318,7 @@ router.get('/profile', verifyToken, (req: Request, res: Response) => {
 
 // ✅ Working perfectly
 // Change password endpoint (to change an admin's password)
-router.post('/change-password', async (req: Request, res: Response): Promise<Response> => {
+router.post('/change-password', rateLimit(5, 60, 'change-password'), async (req: Request, res: Response): Promise<Response> => {
   try {
     const { adminEmail, currentPassword, newPassword } = req.body;
 
