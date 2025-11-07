@@ -1,3 +1,4 @@
+// The routes in here are for the auth service to register (/register), login (/login), logout (/logout), change password (/change-password)
 import { Router } from 'express';
 import { Request, Response } from 'express';
 import { Admin } from '../models/Admin';
@@ -13,6 +14,42 @@ dotenv.config({ path: '.env' });
 dotenv.config({ path: './.env' });
 dotenv.config(); // Also try default .env in root
   
+// ✅ Working perfectly
+// Middleware to verify JWT token and ensure the caller is a Connect Fulfillment platform admin (A more secure way to verify the token)
+export const verifyCFAdminToken = async (req: Request, res: Response, next: any) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1]; // Bearer TOKEN
+
+    if (!token) {
+      return res.status(401).json({
+        message: 'Access denied',
+        error: 'No token provided'
+      });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
+    
+    // Verify that the email from token exists in Admin collection
+    const admin = await Admin.findOne({ adminEmail: decoded.adminEmail });
+    if (!admin) {
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Only Connect Fulfillment admins can access this resource'
+      });
+    }
+
+    req.body.adminId = decoded.adminId;
+    req.body.adminEmail = decoded.adminEmail;
+    req.body.adminName = decoded.adminName;
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      message: 'Invalid token',
+      error: 'Token verification failed'
+    });
+  }
+};
+
 // Validates company email by checking if the email is in the staffs collection in the database.
 const isValidCompanyEmail = async (email: string): Promise<boolean> => {
   const staffsCollection = mongoose.connection.collection('staffs');
@@ -265,33 +302,33 @@ router.post('/login', rateLimit(5, 60, 'login'), async (req: Request, res: Respo
 
 // ✅ Working perfectly
 // Middleware to verify JWT token
-export const verifyToken = (req: Request, res: Response, next: any) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1]; // Bearer TOKEN
+// export const verifyToken = (req: Request, res: Response, next: any) => {
+//   try {
+//     const token = req.headers.authorization?.split(' ')[1]; // Bearer TOKEN
 
-    if (!token) {
-      return res.status(401).json({
-        message: 'Access denied',
-        error: 'No token provided'
-      });
-    }
+//     if (!token) {
+//       return res.status(401).json({
+//         message: 'Access denied',
+//         error: 'No token provided'
+//       });
+//     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
-    req.body.adminId = decoded.adminId;
-    req.body.adminEmail = decoded.adminEmail;
-    req.body.adminName = decoded.adminName;
-    next();
-  } catch (error) {
-    return res.status(401).json({
-      message: 'Invalid token',
-      error: 'Token verification failed'
-    });
-  }
-};
+//     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
+//     req.body.adminId = decoded.adminId;
+//     req.body.adminEmail = decoded.adminEmail;
+//     req.body.adminName = decoded.adminName;
+//     next();
+//   } catch (error) {
+//     return res.status(401).json({
+//       message: 'Invalid token',
+//       error: 'Token verification failed'
+//     });
+//   }
+// };
 
 // ✅ Working perfectly
 // Logout endpoint (clients should delete their JWT on logout)
-router.get('/logout', verifyToken, (_req: Request, res: Response) => {
+router.get('/logout', verifyCFAdminToken, (_req: Request, res: Response) => {
   // Removes the JWT from the client's browser
   res.clearCookie('token');
   res.clearCookie('connect.sid');
@@ -304,8 +341,8 @@ router.get('/logout', verifyToken, (_req: Request, res: Response) => {
 
 
 // ✅ Working perfectly
-// Protected route example to conform that verifyToken Middleware works
-router.get('/profile', verifyToken, (req: Request, res: Response) => {
+// Protected route example to conform that verifyCFAdminToken Middleware works
+router.get('/profile', verifyCFAdminToken, (req: Request, res: Response) => {
   res.json({
     message: 'Admin profile',
     admin: {
@@ -357,6 +394,11 @@ router.post('/change-password', rateLimit(5, 60, 'change-password'), async (req:
   if (!newPasswordStrength) {
     return res.status(400).json({ message: 'Invalid password', error: 'The new password you provided does not meet the requirements' });
   }
+
+  // Check if new password is the same as the current password
+  if (newPassword === currentPassword) {
+    return res.status(400).json({ message: 'Invalid password', error: 'The new password you provided is the same as the current password' });
+  }
   // Hashes new password
   const hashedNewPassword = await bcrypt.hash(newPassword, 12);
   admin.password = hashedNewPassword;
@@ -366,4 +408,5 @@ router.post('/change-password', rateLimit(5, 60, 'change-password'), async (req:
     return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
   }
 });
+
 export default router;

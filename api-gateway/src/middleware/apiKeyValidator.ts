@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import axios from 'axios';
 import jwt from 'jsonwebtoken';
+import { recordInvalidApiKeyAttempt } from './gatewayRateLimit';
 
 export const validateApiKey = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -25,15 +26,30 @@ export const validateApiKey = async (req: Request, res: Response, next: NextFunc
     const apiKey = req.headers['your_company_api_key'] as string;
 
     if (!apiKey) {
+      const attempt = await recordInvalidApiKeyAttempt(req);
+      if (attempt.bannedNow) {
+        return res.status(429).json({
+          error: 'Too many invalid API key attempts. Access temporarily blocked.',
+          retryAfterSeconds: attempt.retryAfterSeconds,
+        });
+      }
       return res.status(401).json({ error: 'API key validation failed: Company API key' });
     }
 
     // Calls company-service to verify the API key
-    const response = await axios.get(`http://company-service:4004/verify-key`, {
+    const companyServiceBaseUrl = process.env.COMPANY_SERVICE_URL || 'http://company-service:4004';
+    const response = await axios.get(`${companyServiceBaseUrl}/verify-key`, {
       headers: { 'your_company_api_key': apiKey },
     });
 
     if (!response.data.valid) {
+      const attempt = await recordInvalidApiKeyAttempt(req);
+      if (attempt.bannedNow) {
+        return res.status(429).json({
+          error: 'Too many invalid API key attempts. Access temporarily blocked.',
+          retryAfterSeconds: attempt.retryAfterSeconds,
+        });
+      }
       return res.status(403).json({ error: 'API key validation failed: Invalid Company API key' });
     }
   

@@ -1,4 +1,5 @@
 import { Schema, Document, model } from 'mongoose';
+import mongoose from 'mongoose';
 
 export interface ICompany extends Document {
   companyName: string;
@@ -13,6 +14,8 @@ export interface ICompany extends Document {
   companySubCategory: string;
   companyApiKey: string;
   isVerified: boolean;
+  companyAdminEmails: string[];
+  companyAdminIDDetails: { companyAdminName: string, companyAdminEmail: string, companyAdminPassword: string }[];
 }
 
 const CompanySchema: Schema = new Schema<ICompany>(
@@ -27,9 +30,11 @@ const CompanySchema: Schema = new Schema<ICompany>(
     companyDetails: { type: String, required: true, minLength: [100, 'Company details must be at least 100 characters'], maxLength: [1000, 'Company details must be less than 1000 characters']},
     companyCategory: { type: String, required: true, enum: ['Electronics', 'Clothing', 'Furniture', 'Other'] },
     companySubCategory: { type: String, required: true, enum: ['Electronics', 'Clothing', 'Furniture', 'Other'] },
-    companyApiKey: { type: String, default: null }, // Admin generates the API key for the company from the admin dashboard after approval of the company and will get it sent to them through mail afterwards.
+    companyApiKey: { type: String }, // Admin generates the API key for the company from the admin dashboard after approval of the company and will get it sent to them through mail afterwards.
     // A Connect Fulfillment admin will verify the company after they register themselves then change their status to true.
     isVerified: { type: Boolean, default: false, required: true },
+    companyAdminEmails: { type: [String], default: [], required: true},
+    companyAdminIDDetails: { type: [{ companyAdminName: String, companyAdminEmail: String, companyAdminPassword: String }], default: [], required: true},
   },
   { timestamps: true }
 );
