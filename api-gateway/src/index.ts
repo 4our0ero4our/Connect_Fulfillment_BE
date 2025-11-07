@@ -2,6 +2,7 @@ import express, { NextFunction } from 'express';
 import { createProxyMiddleware, RequestHandler } from 'http-proxy-middleware';
 import { Request, Response } from 'express';
 import { validateApiKey } from './middleware/apiKeyValidator';
+import { checkInvalidApiKeyBan } from './middleware/gatewayRateLimit';
 
 const app = express();
 
@@ -69,7 +70,7 @@ const notificationProxy: RequestHandler = createProxyMiddleware({
 
 // ✅ Working perfectly
 // Root endpoint (to confirm API key is valid)
-app.get('/', validateApiKey, (_req: Request, res: Response) => {
+app.get('/', checkInvalidApiKeyBan( 'api-gateway' ), validateApiKey, (_req: Request, res: Response) => {
   res.json({ 
     message: `Hello ${res.locals.company?.companyName}. Congratulations on successfully integrating your API with the Connect Fulfillment API Gateway. Seeing this message means your API KEY is valid and the API Gateway is working correctly.`,
     companyDetails: res.locals.company ? res.locals.company : 'No company details found',
@@ -89,9 +90,9 @@ app.get('/health', (_req: Request, res: Response) => res.json({ status:'ok' , ti
 app.use('/auth', authProxy);
 
 // Services routes that are protected by validateApiKey middleware (API key validation)
-app.use('/order', validateApiKey, orderProxy);
-app.use('/ticket', validateApiKey, ticketProxy);
-app.use('/company', validateApiKey, companyProxy);
-app.use('/notify', validateApiKey, notificationProxy);
+app.use('/order', checkInvalidApiKeyBan( 'order' ), validateApiKey, orderProxy);
+app.use('/ticket', checkInvalidApiKeyBan( 'ticket' ), validateApiKey, ticketProxy);
+app.use('/company', checkInvalidApiKeyBan( 'company' ), validateApiKey, companyProxy);
+app.use('/notify', checkInvalidApiKeyBan( 'notify' ), validateApiKey, notificationProxy);
 
 app.listen(process.env.API_GATEWAY_PORT as unknown as number || 4000, () => (console.log(`API Gateway listening on ${process.env.API_GATEWAY_PORT as unknown as number || 4000}`)));

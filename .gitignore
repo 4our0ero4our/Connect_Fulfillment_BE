@@ -61,3 +61,7 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+
+# Unecessary Documentations
+API_DOCUMENTATION.md
+Connect_Fulfillment_14day_Roadmap.md
