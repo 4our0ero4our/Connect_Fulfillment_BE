@@ -377,7 +377,7 @@ Redis docs: https://redis.io/docs/latest/
 
 - [✅] Implement JWT-based login in Auth (issue JWT, refresh token)
 - [✅] Add API key generation for companies (store hashed apiKey in Company collection - Will be done on the admin dashboards now)
-- [ ] Use Redis for session or token blacklist
+- [✅] Use Redis for session or token blacklist
 - [✅] Gateway validates JWT/API key
 
 **Milestone (Day 3):** Merchant can register and receive API key; gateway validates API key.
@@ -389,9 +389,8 @@ Redis docs: https://redis.io/docs/latest/
 **Learning:** File uploads (docs), secure storage (S3 / local for dev).  
 **Build:**
 
-- [ ] Scaffold Company Service (endpoints: POST /company, GET /company/:id)
-- [ ] Add doc upload endpoint (dev: save in `/tmp` or local `infra/uploads`)
-- [ ] Cache verification result in Redis
+- [✅] Scaffold Company Service (endpoints: POST /company, GET /company/:id)
+- [✅] Add doc upload endpoint (dev: save in `/tmp` or local `infra/uploads`)
 
 **Deliverable:** Company onboarding flow
 

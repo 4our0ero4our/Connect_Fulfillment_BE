@@ -6,6 +6,10 @@ import { checkInvalidApiKeyBan } from './middleware/gatewayRateLimit';
 
 const app = express();
 
+// Body parsing middleware (needed for DELETE requests with bodies)
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
 // Timeout middleware
 app.use((req, res, next) => {
   req.setTimeout(30000); 
@@ -32,7 +36,8 @@ const authProxy: RequestHandler = createProxyMiddleware({
   onProxyReq: (proxyReq, req: any, res) => {
     console.log(`[API Gateway] Proxying ${req.method} ${req.url} to auth-service`);
     // If body was parsed by any middleware, re-stream it to the target
-    if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
+    // DELETE requests can also have bodies (though not common, some APIs use them)
+    if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE')) {
       const bodyData = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
       if (!proxyReq.getHeader('Content-Type')) {
         proxyReq.setHeader('Content-Type', 'application/json');

@@ -7,56 +7,30 @@ import dotenv from 'dotenv';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import rateLimit from '../middleware/rateLimit';
+import { verifyCFAdminToken } from '../middleware/verifyCFAdminToken';
+import { verifyLeadCFAdmin } from '../middleware/verifyLeadCFAdmin';
+import { preserveRequestBody } from '../middleware/preserveRequestBody';
+import { Staff } from '../models/Staff';
 
 const router = Router();
 // Try multiple paths for .env file (works in both local and Docker)
 dotenv.config({ path: '.env' });
 dotenv.config({ path: './.env' });
 dotenv.config(); // Also try default .env in root
-  
-// ✅ Working perfectly
-// Middleware to verify JWT token and ensure the caller is a Connect Fulfillment platform admin (A more secure way to verify the token)
-export const verifyCFAdminToken = async (req: Request, res: Response, next: any) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1]; // Bearer TOKEN
-
-    if (!token) {
-      return res.status(401).json({
-        message: 'Access denied',
-        error: 'No token provided'
-      });
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
-    
-    // Verify that the email from token exists in Admin collection
-    const admin = await Admin.findOne({ adminEmail: decoded.adminEmail });
-    if (!admin) {
-      return res.status(403).json({
-        message: 'Access denied',
-        error: 'Only Connect Fulfillment admins can access this resource'
-      });
-    }
-
-    req.body.adminId = decoded.adminId;
-    req.body.adminEmail = decoded.adminEmail;
-    req.body.adminName = decoded.adminName;
-    next();
-  } catch (error) {
-    return res.status(401).json({
-      message: 'Invalid token',
-      error: 'Token verification failed'
-    });
-  }
-};
 
 // Validates company email by checking if the email is in the staffs collection in the database.
-const isValidCompanyEmail = async (email: string): Promise<boolean> => {
+const isValidCFStaffEmail = async (email: string): Promise<boolean> => {
   const staffsCollection = mongoose.connection.collection('staffs');
   const staff = await staffsCollection.findOne({ email: email });
   return staff ? true : false;
 };
 
+// Validates if the staff can be a Connect Fulfillment admin
+const isValidCFAdminStaff = async (email: string): Promise<boolean> => {
+  const staffsCollection = mongoose.connection.collection('staffs');
+  const staff = await staffsCollection.findOne({ email: email, canBeCFAdmin: true });
+  return staff ? true : false;
+};
 // Validates email format
 const isValidEmailFormat = (email: string): boolean => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -69,6 +43,13 @@ const isValidPassword = (password: string): boolean => {
   return passwordRegex.test(password);
 };
 
+// Validates if the staff is a lead Connect Fulfillment admin (helper function for route logic)
+const isValidLeadCFAdmin = async (email: string): Promise<boolean> => {
+  const staffsCollection = mongoose.connection.collection('staffs');
+  const staff = await staffsCollection.findOne({ email: email, isALeadCFAdmin: true });
+  return staff ? true : false;
+};
+
 // ✅ Working perfectly
 // Root endpoint (to confirm that Auth service is running)
 router.get('/', (_req: Request, res: Response) => {
@@ -79,8 +60,8 @@ router.get('/', (_req: Request, res: Response) => {
 // Register endpoint (to register a new admin)
 router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res: Response) => {
   const startTime = Date.now();
-  console.log('🔄 Registration request received:', { 
-    adminEmail: req.body?.adminEmail, 
+  console.log('🔄 Registration request received:', {
+    adminEmail: req.body?.adminEmail,
     adminName: req.body?.adminName,
     timestamp: new Date().toISOString()
   });
@@ -90,7 +71,7 @@ router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res:
 
     // Validation checks
     if (!adminName || !adminEmail || !password) {
-      console.log('❌ Validation failed: Missing required fields');
+      console.log('Validation failed: Missing required fields');
       return res.status(400).json({
         message: 'All fields are required',
         errors: {
@@ -103,7 +84,7 @@ router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res:
 
     // Validate email format
     if (!isValidEmailFormat(adminEmail)) {
-      console.log('❌ Invalid email format:', adminEmail);
+      console.log('Invalid email format:', adminEmail);
       return res.status(400).json({
         message: 'Invalid email format',
         error: 'Please enter a valid email address'
@@ -111,17 +92,25 @@ router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res:
     }
 
     // Validate company email
-    if (!(await isValidCompanyEmail(adminEmail))) {
-      console.log('❌ Invalid company email:', adminEmail);
-      return res.status(403).json({
-        message: 'Access denied',
+    if (!(await isValidCFStaffEmail(adminEmail))) {
+      console.log('Invalid Connect Fulfillment staff email:', adminEmail);
+      return res.status(400).json({
+        message: 'Invalid Connect Fulfillment staff email',
         error: 'Only Connect Fulfillment staff emails are allowed to register'
+      });
+    }
+    // Validate if the staff can be a Connect Fulfillment admin
+    if (!(await isValidCFAdminStaff(adminEmail))) {
+      console.log('Connect Fulfillment staff cannot be a Connect Fulfillment admin:', adminEmail);
+      return res.status(400).json({
+        message: 'Connect Fulfillment staff cannot be a Connect Fulfillment admin',
+        error: 'Only Connect Fulfillment staff that can be a Connect Fulfillment admin can register'
       });
     }
 
     // Validate password strength
     if (!isValidPassword(password)) {
-      console.log('❌ Password does not meet requirements');
+      console.log('Password does not meet requirements');
       return res.status(400).json({
         message: 'Password does not meet requirements',
         error: 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&)'
@@ -132,7 +121,7 @@ router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res:
     console.log('🔍 Checking if admin already exists...');
     const existingAdmin = await Admin.findOne({ adminEmail: adminEmail.toLowerCase() });
     if (existingAdmin) {
-      console.log('❌ Admin already exists:', adminEmail);
+      console.log('Admin already exists:', adminEmail);
       return res.status(409).json({
         message: 'Admin already exists',
         error: 'An admin with this email is already registered'
@@ -164,9 +153,9 @@ router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res:
     );
 
     const processingTime = Date.now() - startTime;
-    console.log('✅ Registration successful:', { 
-      adminEmail: admin.adminEmail, 
-      processingTime: `${processingTime}ms` 
+    console.log('✅ Registration successful:', {
+      adminEmail: admin.adminEmail,
+      processingTime: `${processingTime}ms`
     });
 
     res.status(201).json({
@@ -181,7 +170,7 @@ router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res:
 
   } catch (error: any) {
     const processingTime = Date.now() - startTime;
-    console.error('❌ Registration error:', {
+    console.error('Registration error:', {
       error: error.message,
       stack: error.stack,
       processingTime: `${processingTime}ms`,
@@ -190,7 +179,7 @@ router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res:
 
     // Handles MongoDB duplicate key error
     if (error.code === 11000) {
-      console.log('❌ Duplicate key error - admin already exists');
+      console.log('Duplicate key error - admin already exists');
       return res.status(409).json({
         message: 'Admin already exists',
         error: 'An admin with this email is already registered'
@@ -199,7 +188,7 @@ router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res:
 
     // Handles MongoDB connection errors
     if (error.name === 'MongoNetworkError' || error.name === 'MongoTimeoutError') {
-      console.log('❌ MongoDB connection error');
+      console.log('MongoDB connection error');
       return res.status(503).json({
         message: 'Database temporarily unavailable',
         error: 'Please try again in a moment'
@@ -208,7 +197,7 @@ router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res:
 
     // Handles validation errors
     if (error.name === 'ValidationError') {
-      console.log('❌ Validation error:', error.message);
+      console.log('Validation error:', error.message);
       return res.status(400).json({
         message: 'Validation error',
         error: error.message
@@ -248,10 +237,18 @@ router.post('/login', rateLimit(5, 60, 'login'), async (req: Request, res: Respo
     }
 
     // Validates company email
-    if (!(await isValidCompanyEmail(adminEmail))) {
-      return res.status(403).json({
-        message: 'Access denied',
+    if (!(await isValidCFStaffEmail(adminEmail))) {
+      return res.status(400).json({
+        message: 'Invalid Connect Fulfillment staff email',
         error: 'Only Connect Fulfillment staff emails are allowed to login'
+      });
+    }
+    // Validate if the staff can be a Connect Fulfillment admin
+    if (!(await isValidCFAdminStaff(adminEmail))) {
+      console.log('Connect Fulfillment staff cannot be a Connect Fulfillment admin:', adminEmail);
+      return res.status(400).json({
+        message: 'Connect Fulfillment staff cannot be a Connect Fulfillment admin',
+        error: 'Only Connect Fulfillment staff that can be a Connect Fulfillment admin can login'
       });
     }
 
@@ -379,34 +376,347 @@ router.post('/change-password', rateLimit(5, 60, 'change-password'), async (req:
       });
     }
 
-  // Finds admin by email
-  const admin = await Admin.findOne({ adminEmail: adminEmail.toLowerCase() });
-  if (!admin) {
-    return res.status(401).json({ message: 'Invalid credentials', error: 'No admin with this email was found' });
-  }
-  const isPasswordValid = await bcrypt.compare(currentPassword, admin.password || '');
-  // Verifies current password
-  if (!isPasswordValid) {
-    return res.status(401).json({ message: 'Invalid credentials', error: 'The current password you provided is incorrect' });
-  }
-  // Validates new password strength
-  const newPasswordStrength = isValidPassword(newPassword);
-  if (!newPasswordStrength) {
-    return res.status(400).json({ message: 'Invalid password', error: 'The new password you provided does not meet the requirements' });
-  }
+    // Finds admin by email
+    const admin = await Admin.findOne({ adminEmail: adminEmail.toLowerCase() });
+    if (!admin) {
+      return res.status(401).json({ message: 'Invalid credentials', error: 'No admin with this email was found' });
+    }
+    const isPasswordValid = await bcrypt.compare(currentPassword, admin.password || '');
+    // Verifies current password
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: 'Invalid credentials', error: 'The current password you provided is incorrect' });
+    }
+    // Validates new password strength
+    const newPasswordStrength = isValidPassword(newPassword);
+    if (!newPasswordStrength) {
+      return res.status(400).json({ message: 'Invalid password', error: 'The new password you provided does not meet the requirements' });
+    }
 
-  // Check if new password is the same as the current password
-  if (newPassword === currentPassword) {
-    return res.status(400).json({ message: 'Invalid password', error: 'The new password you provided is the same as the current password' });
-  }
-  // Hashes new password
-  const hashedNewPassword = await bcrypt.hash(newPassword, 12);
-  admin.password = hashedNewPassword;
-  await admin.save();
-  return res.status(200).json({ message: 'Your password has been changed successfully. Please login with your new password.' });
-} catch (error: any) {
+    // Check if new password is the same as the current password
+    if (newPassword === currentPassword) {
+      return res.status(400).json({ message: 'Invalid password', error: 'The new password you provided is the same as the current password' });
+    }
+    // Hashes new password
+    const hashedNewPassword = await bcrypt.hash(newPassword, 12);
+    admin.password = hashedNewPassword;
+    await admin.save();
+    return res.status(200).json({ message: 'Your password has been changed successfully. Please login with your new password.' });
+  } catch (error: any) {
     return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
   }
 });
 
+// ✅ Working Perfectly
+// Add a new staff endpoint (to add a new staff)
+router.post('/add-staff', rateLimit(5, 60, 'add-staff'), verifyCFAdminToken, verifyLeadCFAdmin, async (req: Request, res: Response) => {
+  try {
+    const { newStaffEmail, newStaffName, newStaffRole, canBeCFAdmin, isALeadCFAdmin } = req.body;
+
+    // Validation checks
+    if (!newStaffEmail || !newStaffName || !newStaffRole) {
+      return res.status(400).json({
+        message: 'All fields are required',
+        errors: {
+          newStaffEmail: !newStaffEmail ? 'Staff email is required' : null,
+          newStaffName: !newStaffName ? 'Staff name is required' : null,
+          newStaffRole: !newStaffRole ? 'Staff role is required' : null,
+        }
+      });
+    }
+
+    // Validates email format
+    if (!isValidEmailFormat(newStaffEmail)) {
+      return res.status(400).json({
+        message: 'Invalid email format',
+        error: 'Please enter a valid email address'
+      });
+    }
+
+    // Validates if the staff email is already in the database
+    if (await isValidCFStaffEmail(newStaffEmail)) {
+      return res.status(409).json({
+        message: 'Staff email already exists',
+        error: 'The staff email you provided is already in the database'
+      });
+    }
+
+    // Validates staff role (Staff roles are gonna be included later in the database for confirmation purposes because it's gonna be a dropdown in the frontend)
+    // if (newStaffRole !== 'admin' && newStaffRole !== 'staff') {
+    //   return res.status(400).json({
+    //     message: 'Invalid staff role',
+    //     error: 'Staff role must be either "admin" or "staff"'
+    //   });
+    // }
+
+
+
+    // Create staff
+    const staff = await Staff.create({
+      name: newStaffName,
+      email: newStaffEmail.toLowerCase(),
+      role: newStaffRole,
+      canBeCFAdmin: canBeCFAdmin,
+      isALeadCFAdmin: isALeadCFAdmin
+    });
+
+    // Return staff without sensitive data
+    const staffResponse = staff.toObject();
+    res.status(201).json({
+      message: 'Staff added successfully',
+      staff: {
+        id: staffResponse._id,
+        name: staffResponse.name,
+        email: staffResponse.email,
+        role: staffResponse.role,
+        canBeCFAdmin: staffResponse.canBeCFAdmin,
+        isALeadCFAdmin: staffResponse.isALeadCFAdmin,
+        createdAt: staffResponse.createdAt,
+        updatedAt: staffResponse.updatedAt
+      }
+    });
+
+  } catch (error: any) {
+    console.error('Error adding a staff:', error);
+
+    // Handles MongoDB duplicate key error
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message: 'Staff email already exists',
+        error: 'An staff with this email is already registered'
+      });
+    }
+
+    // Handles validation errors
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: error.message
+      });
+    }
+
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
+});
+
+// ✅ Working Perfectly
+// Update a staff admin status endpoint (to update a staff admin status)
+router.post('/update-staff-admin-status', rateLimit(5, 60, 'update-staff-admin-status'), verifyCFAdminToken, verifyLeadCFAdmin, async (req: Request, res: Response) => {
+  try {
+    const { staffEmail, canBeCFAdmin } = req.body;
+    // Validation checks
+    if (!staffEmail || typeof canBeCFAdmin !== 'boolean') {
+      return res.status(400).json({
+        message: 'All fields are required',
+        errors: {
+          staffEmail: !staffEmail ? 'Staff email is required' : null,
+          canBeCFAdmin: typeof canBeCFAdmin !== 'boolean' ? 'Can be a Connect Fulfillment admin status is required' : null
+        }
+      });
+    }
+    // Validates email format
+    if (!isValidEmailFormat(staffEmail)) {
+      return res.status(400).json({
+        message: 'Invalid email format',
+        error: 'Please enter a valid email address'
+      });
+    }
+    // Validates if the staff email is in the database
+    if (!(await isValidCFStaffEmail(staffEmail))) {
+      return res.status(400).json({
+        message: 'Staff email not found',
+        error: 'The staff email you provided was not found in the database'
+      });
+    }
+    // Updates the staff admin status
+    await Staff.updateOne({ email: staffEmail }, { $set: { canBeCFAdmin: canBeCFAdmin } });
+    const updatedStaff = await Staff.findOne({ email: staffEmail });
+    if (!updatedStaff) {
+      return res.status(400).json({
+        message: 'Staff not found',
+        error: 'The recently updated staff was not found in the database'
+      });
+    }
+    const staffResponse = updatedStaff.toObject();
+    return res.status(200).json({
+      message: 'Staff admin status updated successfully', staff: {
+        id: staffResponse._id,
+        name: staffResponse.name,
+        email: staffResponse.email,
+        role: staffResponse.role,
+        canBeCFAdmin: staffResponse.canBeCFAdmin,
+        isALeadCFAdmin: staffResponse.isALeadCFAdmin,
+      }
+    });
+  } catch (error: any) {
+    console.error('Error updating a staff admin status:', error);
+    return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
+
+// ✅ Working Perfectly
+// Delete a staff endpoint (to delete a staff)
+router.delete('/delete-staff', rateLimit(5, 60, 'delete-staff'), verifyCFAdminToken, verifyLeadCFAdmin, async (req: Request, res: Response) => {
+  try {
+    const { staffEmail } = req.body;
+
+    // Validation checks
+    if (!staffEmail) {
+      return res.status(400).json({
+        message: 'Staff email is required',
+        error: 'Please enter a valid staff email'
+      });
+    }
+
+    // Validates email format
+    if (!isValidEmailFormat(staffEmail)) {
+      return res.status(400).json({
+        message: 'Invalid email format',
+        error: 'Please enter a valid email address'
+      });
+    }
+
+    // Validates if the staff email is in the database
+    if (!(await isValidCFStaffEmail(staffEmail))) {
+      return res.status(404).json({
+        message: 'Staff email not found',
+        error: 'The staff email you provided is not in the database'
+      });
+    }
+
+    // Prevent deletion of lead admins 🌚
+    const isStaffLeadAdmin = await isValidLeadCFAdmin(staffEmail);
+    if (isStaffLeadAdmin) {
+      return res.status(403).json({
+        message: 'Cannot delete lead admin',
+        error: 'Lead Connect Fulfillment admins cannot be deleted through this endpoint. Why do you want to delete a lead admin? 🤔 Only the dev can do that abeg. 🤣'
+      });
+    }
+
+    // Deletes the staff from the database
+    const deleteResult = await Staff.deleteOne({ email: staffEmail.toLowerCase() });
+    if (deleteResult.deletedCount === 0) {
+      return res.status(404).json({
+        message: 'Staff not found',
+        error: 'The staff could not be deleted or was not found'
+      });
+    }
+
+    return res.status(200).json({
+      message: `Unfortunately and officially, ${staffEmail} is no more a Connect Fulfillment staff. Baba don pass him boundary bah? 🤣. It wasn't nice while it lasted, anyway! 💀`
+    });
+  } catch (error: any) {
+    console.error('Error deleting a staff:', error);
+    return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
+
+// Get all staffs endpoint (to get all staffs)
+router.get('/get-all-staffs', rateLimit(5, 60, 'get-all-staffs'), verifyCFAdminToken, verifyLeadCFAdmin, async (_req: Request, res: Response): Promise<Response> => {
+  try {
+    const staffs = await Staff.find();
+    if (!staffs) {
+      return res.status(404).json({
+        message: 'No staffs found',
+        error: 'No staffs were found in the database'
+      });
+    }
+    const staffResponse = staffs.map((staff) => staff.toObject());
+    return res.status(200).json({
+      message: 'All staffs fetched successfully', staffs: staffResponse.map((staff) => ({
+        id: staff._id,
+        name: staff.name,
+        email: staff.email,
+        role: staff.role,
+        canBeCFAdmin: staff.canBeCFAdmin,
+        isALeadCFAdmin: staff.isALeadCFAdmin,
+      }))
+    });
+  } catch (error: any) {
+    console.error('Error fetching all staffs:', error);
+    return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
+
+// ✅ Working Perfectly
+// Remove admin endpoint (to remove an admin)
+router.delete('/remove-admin', rateLimit(5, 60, 'remove-admin'), preserveRequestBody, verifyCFAdminToken, verifyLeadCFAdmin, async (req: Request, res: Response) => {
+  try {
+    // Get the adminEmail from the original request body (saved before middleware overwrote it)
+    const adminEmail = res.locals.originalAdminEmail || req.body.targetAdminEmail;
+    
+    // Validation checks
+    if (!adminEmail) {
+      return res.status(400).json({
+        message: 'Admin email is required',
+        error: 'Please enter a valid admin email in the request body'
+      });
+    }
+    
+    // Validates email format
+    if (!isValidEmailFormat(adminEmail)) {
+      return res.status(400).json({
+        message: 'Invalid email format',
+        error: 'Please enter a valid email address'
+      });
+    }
+    
+    const normalizedEmail = adminEmail.toLowerCase();
+    
+    // Check if the admin actually exists in the Admin collection
+    const admin = await Admin.findOne({ adminEmail: normalizedEmail });
+    if (!admin) {
+      return res.status(404).json({
+        message: 'Admin not found',
+        error: 'The admin email you provided does not exist in the Admin collection'
+      });
+    }
+    
+    // Prevent removing yourself (optional business rule)
+    const requesterEmail = res.locals.adminEmail || req.body.adminEmail; // From token
+    if (normalizedEmail === requesterEmail?.toLowerCase()) {
+      return res.status(403).json({
+        message: 'Cannot remove yourself',
+        error: 'You cannot remove your own admin account'
+      });
+    }
+    
+    // Remove the admin from the Admin collection
+    const deleteResult = await Admin.deleteOne({ adminEmail: normalizedEmail });
+    if (deleteResult.deletedCount === 0) {
+      return res.status(404).json({
+        message: 'Admin not found',
+        error: 'The admin could not be removed or was not found'
+      });
+    }
+    
+    // Update the Staff collection to set canBeCFAdmin to false
+    const staffsCollection = mongoose.connection.collection('staffs');
+    const updateResult = await staffsCollection.updateOne(
+      { email: normalizedEmail },
+      { $set: { canBeCFAdmin: false } }
+    );
+    
+    console.log(`Admin ${normalizedEmail} removed. Staff collection updated:`, updateResult.modifiedCount > 0 ? 'Yes' : 'No');
+    
+    return res.status(200).json({
+      message: `Unfortunately and officially, ${adminEmail} is no more a Connect Fulfillment admin. Baba don pass him boundary bah? 🤣. It wasn't fun while it lasted, anyway! 💀`,
+      adminRemoved: true,
+      staffUpdated: updateResult.modifiedCount > 0
+    });
+  } catch (error: any) {
+    console.error('Error removing an admin:', error);
+    return res.status(500).json({ 
+      message: 'Internal server error', 
+      error: error?.message || 'An unknown error occurred' 
+    });
+  }
+});
 export default router;
+
+
+
+
+// All admins can access the Connect Fulfillment Dashboards but only the lead admins doesn't have limit as to what adn what not to do on the dashboard.
