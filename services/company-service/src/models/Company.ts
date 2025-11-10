@@ -16,6 +16,11 @@ export interface ICompany extends Document {
   isVerified: boolean;
   companyAdminEmails: string[];
   companyAdminIDDetails: { companyAdminName: string, companyAdminEmail: string, companyAdminPassword: string }[];
+  orderDeletionSettings?: {
+    enabled: boolean;
+    daysToDelete: number; // Number of days after which uncompleted orders should be deleted
+    deletionTime: string; // Time of day to run deletion (format: "HH:mm" in 24-hour format, e.g., "21:00" for 9pm)
+  };
 }
 
 const CompanySchema: Schema = new Schema<ICompany>(
@@ -35,6 +40,14 @@ const CompanySchema: Schema = new Schema<ICompany>(
     isVerified: { type: Boolean, default: false, required: true },
     companyAdminEmails: { type: [String], default: [], required: true},
     companyAdminIDDetails: { type: [{ companyAdminName: String, companyAdminEmail: String, companyAdminPassword: String }], default: [], required: true},
+    orderDeletionSettings: {
+      type: {
+        enabled: { type: Boolean, default: false },
+        daysToDelete: { type: Number, default: 3, min: 1 }, // Minimum 1 day
+        deletionTime: { type: String, default: '21:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] }, // Format: "HH:mm"
+      },
+      required: false,
+    },
   },
   { timestamps: true }
 );

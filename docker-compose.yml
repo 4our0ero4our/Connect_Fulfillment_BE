@@ -79,8 +79,10 @@ services:
       - "4002:4002"
     environment:
       - MONGO_URI=${ORDER_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/OrderDB?appName=404Cluster}
+      - ADMIN_MONGO_URI=${AUTH_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/AdminDB?appName=404Cluster}
       - KAFKA_BROKERS=kafka:9092
       - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET:-wanna_know_what_this_is_yeah_fuck_off_man}
     depends_on:
       - mongodb
       - kafka

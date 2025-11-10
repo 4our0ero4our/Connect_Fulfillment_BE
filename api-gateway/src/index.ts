@@ -55,7 +55,40 @@ const authProxy: RequestHandler = createProxyMiddleware({
 const orderProxy: RequestHandler = createProxyMiddleware({ 
   target: process.env.ORDER_SERVICE_URL as string || 'http://order-service:4002', 
   changeOrigin: true,
-  pathRewrite: { '^/order': '' }
+  pathRewrite: { '^/order': '' },
+  onProxyReq: (proxyReq, req: any, res) => {
+    console.log(`[API Gateway] Proxying ${req.method} ${req.url} to order-service`);
+    // If body was parsed by any middleware, re-stream it to the target
+    if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE')) {
+      const bodyData = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      if (!proxyReq.getHeader('Content-Type')) {
+        proxyReq.setHeader('Content-Type', 'application/json');
+      }
+      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+      proxyReq.write(bodyData);
+      proxyReq.end();
+    }
+  },
+});
+
+// Proxy for /orders routes (plural) - routes directly to order-service without stripping prefix
+const ordersProxy: RequestHandler = createProxyMiddleware({ 
+  target: process.env.ORDER_SERVICE_URL as string || 'http://order-service:4002', 
+  changeOrigin: true,
+  // Don't rewrite path - keep /orders as is
+  onProxyReq: (proxyReq, req: any, res) => {
+    console.log(`[API Gateway] Proxying ${req.method} ${req.url} to order-service`);
+    // If body was parsed by any middleware, re-stream it to the target
+    if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE')) {
+      const bodyData = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      if (!proxyReq.getHeader('Content-Type')) {
+        proxyReq.setHeader('Content-Type', 'application/json');
+      }
+      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+      proxyReq.write(bodyData);
+      proxyReq.end();
+    }
+  },
 });
 const ticketProxy: RequestHandler = createProxyMiddleware({ 
   target: process.env.TICKET_SERVICE_URL as string || 'http://ticket-service:4003', 
@@ -94,7 +127,14 @@ app.get('/health', (_req: Request, res: Response) => res.json({ status:'ok' , ti
 // Auth service route (no API key required)
 app.use('/auth', authProxy);
 
+// Public customer order route (no API key required) - must come BEFORE /orders to avoid conflicts
+// POST /orders/customer - Customers can get their orders in their mail by providing their email (email in body)
+app.post('/orders/customer', ordersProxy);
+
 // Services routes that are protected by validateApiKey middleware (API key validation)
+// Route /orders (plural) for getting/managing orders - must come AFTER customer route to avoid conflicts
+app.use('/orders', checkInvalidApiKeyBan( 'order' ), validateApiKey, ordersProxy);
+// Route /order (singular) for creating orders
 app.use('/order', checkInvalidApiKeyBan( 'order' ), validateApiKey, orderProxy);
 app.use('/ticket', checkInvalidApiKeyBan( 'ticket' ), validateApiKey, ticketProxy);
 app.use('/company', checkInvalidApiKeyBan( 'company' ), validateApiKey, companyProxy);

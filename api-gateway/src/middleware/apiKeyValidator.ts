@@ -5,22 +5,27 @@ import { recordInvalidApiKeyAttempt } from './gatewayRateLimit';
 
 export const validateApiKey = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // Check if admin token is present
-    // const authHeader = req.headers.authorization;
-    // if (authHeader && authHeader.startsWith('Bearer ')) {
-    //   const token = authHeader.split(' ')[1];
-    //   try {
-    //     // Verify admin token - allow admins to bypass API key check
-    //     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    //     if (decoded.adminId || decoded.adminEmail) {
-    //       console.log('Admin token verified, allowing access');
-    //       return next(); // Admin token valid, allow request
-    //     }
-    //   } catch (jwtError: any) {
-    //     console.error('Admin token verification error:', jwtError?.message);
-    //     return res.status(401).json({ error: 'API key validation failed: Invalid Admin token' });
-    //   }
-    // }
+    // Check if admin token is present - allow admins to bypass API key check
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      try {
+        // Verify admin token - allow admins to bypass API key check
+        const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
+        if (decoded.adminId || decoded.adminEmail) {
+          console.log('Admin token verified, allowing access without API key');
+          // Store admin info in res.locals for downstream services
+          res.locals.isAdmin = true;
+          res.locals.adminId = decoded.adminId;
+          res.locals.adminEmail = decoded.adminEmail;
+          res.locals.adminName = decoded.adminName;
+          return next(); // Admin token valid, allow request
+        }
+      } catch (jwtError: any) {
+        // Token invalid or expired - continue to check API key
+        console.log('Admin token verification failed, checking API key instead');
+      }
+    }
 
     // No valid admin token, require company API key
     const apiKey = req.headers['your_company_api_key'] as string;
