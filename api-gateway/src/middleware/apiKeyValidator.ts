@@ -3,6 +3,36 @@ import axios from 'axios';
 import jwt from 'jsonwebtoken';
 import { recordInvalidApiKeyAttempt } from './gatewayRateLimit';
 
+const getCompanyServiceUrls = (): string[] => {
+  const urls: string[] = [];
+  if (process.env.COMPANY_SERVICE_URL) {
+    urls.push(process.env.COMPANY_SERVICE_URL);
+  }
+  urls.push('http://company-service:4004');
+  urls.push('http://localhost:4004');
+  return Array.from(new Set(urls));
+};
+
+const fetchCompanyValidation = async (apiKey: string) => {
+  let lastError: any;
+  for (const baseUrl of getCompanyServiceUrls()) {
+    try {
+      const response = await axios.get(`${baseUrl}/verify-key`, {
+        headers: { 'your_company_api_key': apiKey },
+        timeout: 5000,
+      });
+      return { response, baseUrl };
+    } catch (error: any) {
+      lastError = error;
+      if (error?.code === 'ENOTFOUND' || error?.code === 'ECONNREFUSED') {
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError || new Error('Company service validation failed');
+};
+
 export const validateApiKey = async (req: Request, res: Response, next: NextFunction) => {
   try {
     // Check if admin token is present - allow admins to bypass API key check
@@ -41,11 +71,7 @@ export const validateApiKey = async (req: Request, res: Response, next: NextFunc
       return res.status(401).json({ error: 'API key validation failed: Company API key' });
     }
 
-    // Calls company-service to verify the API key
-    const companyServiceBaseUrl = process.env.COMPANY_SERVICE_URL || 'http://company-service:4004';
-    const response = await axios.get(`${companyServiceBaseUrl}/verify-key`, {
-      headers: { 'your_company_api_key': apiKey },
-    });
+    const { response, baseUrl } = await fetchCompanyValidation(apiKey);
 
     if (!response.data.valid) {
       const attempt = await recordInvalidApiKeyAttempt(req);
@@ -58,10 +84,19 @@ export const validateApiKey = async (req: Request, res: Response, next: NextFunc
       return res.status(403).json({ error: 'API key validation failed: Invalid Company API key' });
     }
   
-    console.log('Company API key is valid', response.data.company);
-    // Attaches company details to response locals
-    console.log('Company details:', response.data.company);
-    res.locals.company = response.data.company ? response.data.company : 'No company details found';
+    const company = response.data.company;
+    console.log(`Company API key is valid via ${baseUrl}`, company);
+    res.locals.company = company ? company : 'No company details found';
+
+    if (company) {
+      const companyId = company._id || company.id;
+      // Attach company info to headers so downstream services (proxied) can access it
+      req.headers['x-company-id'] = companyId ? companyId.toString() : '';
+      req.headers['x-company-api-key'] = company.companyApiKey || '';
+      req.headers['x-company-name'] = company.companyName || '';
+      req.headers['x-company-email'] = company.companyEmail || '';
+      (req as any).company = company; // optional reference
+    }
 
     next();
   } catch (error: any) {

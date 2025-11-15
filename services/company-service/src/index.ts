@@ -14,8 +14,8 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Add timeout middleware
 app.use((req: Request, res: Response, next: NextFunction) => {
-  req.setTimeout(30000); // 30 seconds
-  res.setTimeout(30000); // 30 seconds
+  req.setTimeout(60000); // 60 seconds to match gateway timeout
+  res.setTimeout(60000); // 60 seconds to match gateway timeout
   next();
 });
 
@@ -59,12 +59,22 @@ mongoose.connection.on('disconnected', () => {
 });
 
 // Add middleware to check database connection before processing company routes
+// Note: We check mongoose.connection.readyState instead of isConnected flag
+// to handle cases where connection is established but flag hasn't been updated yet
 app.use((req, res, next) => {
-  if (!isConnected && req.path !== '/health') {
+  // Allow health check and public routes even if DB is not connected
+  if (req.path === '/health' || req.path === '/verify-key') {
+    return next();
+  }
+  
+  // Check actual MongoDB connection state (1 = connected)
+  if (mongoose.connection.readyState !== 1) {
+    console.warn(`Database not connected (readyState: ${mongoose.connection.readyState}) for path: ${req.path}`);
     return res.status(503).json({
       error: 'Service temporarily unavailable',
       message: 'Database connection not established. Please try again in a moment.',
-      service: 'company-service'
+      service: 'company-service',
+      readyState: mongoose.connection.readyState
     });
   }
   next();

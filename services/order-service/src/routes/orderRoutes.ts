@@ -2,19 +2,23 @@ import { Router } from 'express';
 import { Request, Response } from 'express';
 import { Order, OrderStatus, IOrder } from '../models/Order';
 import { verifyMerchant, verifyCFAdmin, verifyAdminOrMerchant, verifyOrderAccess } from '../middleware/orderAccessControl';
-import { publishOrderCreated, publishOrderStatusUpdated, publishOrderDeleted } from '../utils/kafkaProducer';
+import { verifyCompanyApiKey } from '../middleware/verifyCompanyApiKey';
+import { verifyCompanyAdmin } from '../middleware/verifyCompanyAdmin';
+import { publishOrderCreated, publishOrderStatusUpdated, publishOrderDeleted, publishTicketAttached } from '../utils/kafkaProducer';
 
 const router = Router();
 
+// ✅ Working perfectly
 // Health check endpoint
 router.get('/', (_req: Request, res: Response) => {
   res.status(200).json({ message: 'Order Service is running', service: 'order-service' });
 });
 
+// ✅ Working perfectly
 // Create a new order (Merchant only)
 // POST /order
 // Security: Company ID is extracted from API key validation (gateway middleware), NOT from request body
-router.post('/', verifyMerchant, async (req: Request, res: Response) => {
+router.post('/', verifyCompanyApiKey, verifyMerchant, async (req: Request, res: Response) => {
   try {
     // Reject any attempt to send companyId in body
     if (req.body.companyId || req.body.companyApiKey) {
@@ -89,6 +93,7 @@ router.post('/', verifyMerchant, async (req: Request, res: Response) => {
 
     // Create order
     const order = await Order.create({
+      // orderNumber: `ORD-${companyId}-${Date.now()}`,
       companyId,
       companyApiKey,
       companyName,
@@ -165,8 +170,10 @@ router.post('/', verifyMerchant, async (req: Request, res: Response) => {
   }
 });
 
-// Get all orders (Admin: all orders, Merchant: their own orders)
+// ✅ Working perfectly
+// Get all orders (CF Admin: all orders, Company Admin/Merchant: their own company's orders)
 // GET /orders
+// Authentication: CF Admin JWT token OR Company Admin JWT token OR Company API key
 router.get('/orders', verifyAdminOrMerchant, async (req: Request, res: Response) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
@@ -179,11 +186,11 @@ router.get('/orders', verifyAdminOrMerchant, async (req: Request, res: Response)
     // Build query
     const query: any = {};
 
-    // Merchant can only see their own orders
-    if (res.locals.isMerchant) {
+    // Company Admin/Merchant can only see their own company's orders
+    if (res.locals.isMerchant || res.locals.isCompanyAdmin) {
       query.companyId = res.locals.companyId;
     }
-    // Admin can see all orders (no companyId filter)
+    // CF Admin can see all orders (no companyId filter)
 
     // Filter by status
     if (status && Object.values(OrderStatus).includes(status as OrderStatus)) {
@@ -247,8 +254,9 @@ router.get('/orders', verifyAdminOrMerchant, async (req: Request, res: Response)
 });
 
 // ✅ Working perfectly
-// Get order by ID (Admin: any order, Merchant: their own orders only)
+// Get order by ID (CF Admin: any order, Company Admin/Merchant: their own company's orders only)
 // GET /orders/:orderId
+// Authentication: CF Admin JWT token OR Company Admin JWT token OR Company API key
 router.get('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, async (req: Request, res: Response) => {
   try {
     const order = res.locals.order;
@@ -280,8 +288,10 @@ router.get('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, async (
   }
 });
 
-// Update order status (Admin or Merchant)
+// ✅ Working perfectly
+// Update order status (CF Admin, Company Admin, or Merchant)
 // PATCH /orders/:orderId/status
+// Authentication: CF Admin JWT token OR Company Admin JWT token OR Company API key
 router.patch('/orders/:orderId/status', verifyAdminOrMerchant, verifyOrderAccess, async (req: Request, res: Response) => {
   try {
     const { status } = req.body;
@@ -317,12 +327,30 @@ router.patch('/orders/:orderId/status', verifyAdminOrMerchant, verifyOrderAccess
     await order.save();
 
     // Publish order_status_updated event to Kafka
+    // Ticket Service consumes this to generate tickets when status="packed"
+    // Notification Service consumes this to send status update emails
     await publishOrderStatusUpdated({
       orderId: order._id.toString(),
       orderNumber: order.orderNumber,
       companyId: order.companyId,
+      companyName: order.companyName,
+      customerInfo: {
+        customerName: order.customerInfo.customerName,
+        customerEmail: order.customerInfo.customerEmail,
+        customerPhone: order.customerInfo.customerPhone,
+        customerAddress: order.customerInfo.customerAddress,
+      },
+      items: order.items.map(item => ({
+        productId: item.productId,
+        productName: item.productName,
+        quantity: item.quantity,
+        price: item.price,
+      })),
+      totalAmount: order.totalAmount,
+      currency: order.currency,
       oldStatus,
       newStatus: status,
+      ticketId: order.ticketId,
       updatedAt: order.updatedAt,
     });
 
@@ -345,8 +373,9 @@ router.patch('/orders/:orderId/status', verifyAdminOrMerchant, verifyOrderAccess
   }
 });
 
-// Delete order (Admin or Merchant - marks as deleted, doesn't actually delete)
+// Delete order (CF Admin, Company Admin, or Merchant - marks as deleted, doesn't actually get deleted from the database here. Only the status is updated to "deleted" and it's only a lead CF Admin that can actually delete the order from the database and it's another route for that.)
 // DELETE /orders/:orderId
+// Authentication: CF Admin JWT token OR Company Admin JWT token OR Company API key
 // Note: Orders are marked with status "deleted" instead of being removed from database
 router.delete('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, async (req: Request, res: Response) => {
   try {
@@ -402,6 +431,98 @@ router.delete('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, asyn
   }
 });
 
+// Attach ticket to order (Internal endpoint for Ticket Service)
+// PATCH /orders/:orderId/ticket
+// This endpoint is called by Ticket Service after generating a ticket for an order with status="packed"
+// Ticket Service will call this endpoint directly (bypassing API Gateway) or via internal service token
+router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
+  try {
+    const orderId = req.params.orderId;
+    const { ticketId } = req.body;
+
+    // Validation
+    if (!ticketId || typeof ticketId !== 'string') {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'ticketId is required and must be a string'
+      });
+    }
+
+    // Find order
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        message: 'Order not found',
+        error: 'The order you are trying to update does not exist'
+      });
+    }
+
+    // Check if ticket is already attached
+    if (order.ticketId && order.ticketId === ticketId) {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'This ticket is already attached to this order'
+      });
+    }
+
+    // Validate that order status is "packed" (tickets should only be generated for packed orders)
+    if (order.status !== OrderStatus.PACKED) {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: `Tickets can only be attached to orders with status "packed". Current status: ${order.status}`
+      });
+    }
+
+    const oldTicketId = order.ticketId;
+
+    // Update order with ticketId
+    order.ticketId = ticketId;
+    await order.save();
+
+    // Publish ticket_attached_to_order event to Kafka
+    // Notification Service consumes this to send QR code emails to customers
+    await publishTicketAttached({
+      orderId: order._id.toString(),
+      orderNumber: order.orderNumber,
+      companyId: order.companyId,
+      companyName: order.companyName,
+      ticketId: ticketId,
+      customerInfo: {
+        customerName: order.customerInfo.customerName,
+        customerEmail: order.customerInfo.customerEmail,
+        customerPhone: order.customerInfo.customerPhone,
+      },
+      items: order.items.map(item => ({
+        productId: item.productId,
+        productName: item.productName,
+        quantity: item.quantity,
+        price: item.price,
+      })),
+      totalAmount: order.totalAmount,
+      currency: order.currency,
+      status: order.status,
+      attachedAt: order.updatedAt,
+    });
+
+    res.status(200).json({
+      message: 'Ticket attached to order successfully',
+      order: {
+        id: order._id.toString(),
+        orderNumber: order.orderNumber,
+        ticketId: order.ticketId,
+        oldTicketId: oldTicketId || null,
+        status: order.status,
+        updatedAt: order.updatedAt,
+      }
+    });
+  } catch (error: any) {
+    console.error('Error attaching ticket to order:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
+});
 
 // Get all orders for a specific company (Admin only)
 // GET /orders/company/:companyId

@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import { Schema, Document } from 'mongoose';
+import axios from 'axios';
 
 // Admin model interface for AdminDB connection (similar to company-service)
 interface IAdmin extends Document {
@@ -19,7 +20,7 @@ const AdminSchema = new Schema<IAdmin>(
   { timestamps: true, collection: 'admins' }
 );
 
-// Get AdminDB URI
+// Get AdminDB URI - This particular manipulation dey sweet me anywhere I do am 🤗 Type shii 😂
 const getAdminDBUri = (): string => {
   const adminMongoUri = process.env.ADMIN_MONGO_URI;
   if (adminMongoUri) {
@@ -44,6 +45,54 @@ const adminDBConnection = mongoose.createConnection(getAdminDBUri(), {
 });
 
 const Admin = adminDBConnection.models.Admin || adminDBConnection.model<IAdmin>('Admin', AdminSchema);
+
+const COMPANY_SERVICE_URL = process.env.COMPANY_SERVICE_URL || 'http://company-service:4004';
+
+const resolveCompanyFromContext = async (req: Request, res: Response): Promise<any | null> => {
+  let company = res.locals.company as any;
+
+  if (company && typeof company === 'object' && (company._id || company.id) && company.companyApiKey) {
+    return company;
+  }
+
+  const companyIdHeader = req.headers['x-company-id'];
+  const companyApiKeyHeader = req.headers['x-company-api-key'];
+  const companyNameHeader = req.headers['x-company-name'];
+
+  if (companyIdHeader && companyApiKeyHeader) {
+    const companyId = Array.isArray(companyIdHeader) ? companyIdHeader[0] : companyIdHeader;
+    const companyApiKey = Array.isArray(companyApiKeyHeader) ? companyApiKeyHeader[0] : companyApiKeyHeader;
+    const companyName = Array.isArray(companyNameHeader) ? companyNameHeader[0] : companyNameHeader;
+    company = {
+      _id: companyId,
+      companyApiKey,
+      companyName: companyName || 'Unknown Company',
+    };
+    res.locals.company = company;
+    return company;
+  }
+
+  const apiKeyFromRequest = req.headers['your_company_api_key'];
+  if (apiKeyFromRequest) {
+    const apiKey = Array.isArray(apiKeyFromRequest) ? apiKeyFromRequest[0] : apiKeyFromRequest;
+    if (apiKey) {
+      try {
+        const response = await axios.get(`${COMPANY_SERVICE_URL}/verify-key`, {
+          headers: { 'your_company_api_key': apiKey }
+        });
+        if (response.data?.valid && response.data.company) {
+          const verifiedCompany = response.data.company;
+          res.locals.company = verifiedCompany;
+          return verifiedCompany;
+        }
+      } catch (error) {
+        console.error('Error fetching company details from company-service:', (error as any)?.message);
+      }
+    }
+  }
+
+  return null;
+};
 
 // Middleware to verify if requester is a Connect Fulfillment admin
 export const verifyCFAdmin = async (req: Request, res: Response, next: NextFunction) => {
@@ -99,28 +148,34 @@ export const verifyCFAdmin = async (req: Request, res: Response, next: NextFunct
 
 // Middleware to verify if requester is a merchant (has valid API key)
 // This middleware checks if company info is in res.locals (set by API Gateway)
-export const verifyMerchant = (req: Request, res: Response, next: NextFunction) => {
-  // API Gateway validates API key and attaches company info to res.locals
-  const company = res.locals.company;
+export const verifyMerchant = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const company = await resolveCompanyFromContext(req, res);
   
-  if (!company || (!company._id && !company.id) || !company.companyApiKey) {
-    return res.status(403).json({
-      message: 'Access denied',
-      error: 'Valid company API key is required'
+    if (!company || (!company._id && !company.id) || !company.companyApiKey) {
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Valid company API key is required'
+      });
+    }
+  
+    res.locals.isMerchant = true;
+    res.locals.companyId = company._id?.toString() || company.id?.toString();
+    res.locals.companyApiKey = company.companyApiKey;
+    res.locals.companyName = company.companyName;
+    
+    next();
+  } catch (error) {
+    console.error('verifyMerchant error:', (error as any)?.message);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: 'Failed to validate merchant access'
     });
   }
-
-  // Store company info in res.locals for route handlers
-  res.locals.isMerchant = true;
-  res.locals.companyId = company._id?.toString() || company.id?.toString();
-  res.locals.companyApiKey = company.companyApiKey;
-  res.locals.companyName = company.companyName;
-  
-  next();
 };
 
-// Middleware that allows either admin OR merchant
-// Admin can access all orders, merchant can only access their own orders
+// Middleware that allows either admin OR merchant/company admin
+// CF Admin can access all orders, merchant/company admin can only access their own company's orders
 export const verifyAdminOrMerchant = async (req: Request, res: Response, next: NextFunction) => {
   // Check if admin info is already set by API Gateway
   if (res.locals.isAdmin && res.locals.adminEmail) {
@@ -131,29 +186,107 @@ export const verifyAdminOrMerchant = async (req: Request, res: Response, next: N
     }
   }
 
+  // Check if company admin is already verified
+  if (res.locals.isCompanyAdmin && res.locals.companyId) {
+    return next();
+  }
+
   // Check if admin token is provided (if not set by gateway)
   const token = req.headers.authorization?.split(' ')[1];
   
   if (token) {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
-      const admin = await Admin.findOne({ adminEmail: decoded.adminEmail });
       
-      if (admin) {
-        // Valid admin
-        res.locals.isAdmin = true;
-        res.locals.adminId = decoded.adminId;
-        res.locals.adminEmail = decoded.adminEmail;
-        res.locals.adminName = decoded.adminName;
-        return next();
+      // Check if it's a CF Admin token (has adminEmail)
+      if (decoded.adminEmail) {
+        const admin = await Admin.findOne({ adminEmail: decoded.adminEmail });
+        
+        if (admin) {
+          // Valid CF Admin
+          res.locals.isAdmin = true;
+          res.locals.adminId = decoded.adminId;
+          res.locals.adminEmail = decoded.adminEmail;
+          res.locals.adminName = decoded.adminName;
+          return next();
+        }
+      }
+      
+      // Check if it's a Company Admin token (has companyAdminEmail)
+      if (decoded.companyAdminEmail) {
+        // Import and use verifyCompanyAdmin logic
+        const { verifyCompanyAdmin } = await import('./verifyCompanyAdmin');
+        // Call verifyCompanyAdmin which will verify and set res.locals
+        // We need to handle this differently since verifyCompanyAdmin is a middleware
+        // Let's check company admin inline here
+        
+        const companyAdminEmail = decoded.companyAdminEmail.toLowerCase();
+        const companyId = decoded.companyId;
+        const companyApiKey = decoded.companyApiKey;
+        
+        if (companyId && companyApiKey) {
+          // Verify company admin via company-service
+          let companyAdminValid = false;
+          let company: any = null;
+          
+          for (const baseUrl of [process.env.COMPANY_SERVICE_URL || 'http://company-service:4004']) {
+            try {
+              const response = await axios.get(`${baseUrl}/verify-key`, {
+                headers: { 'your_company_api_key': companyApiKey },
+                timeout: 5000,
+              });
+              
+              if (response.data?.valid && response.data?.company) {
+                company = response.data.company;
+                
+                // Verify company ID matches
+                const companyIdStr = company._id?.toString() || company.id?.toString();
+                if (companyIdStr === companyId && company.isVerified) {
+                  // Check if the company admin email exists in companyAdminIDDetails
+                  if (company.companyAdminIDDetails && Array.isArray(company.companyAdminIDDetails)) {
+                    const adminExists = company.companyAdminIDDetails.find(
+                      (admin: any) => admin.companyAdminEmail?.toLowerCase() === companyAdminEmail
+                    );
+                    
+                    if (adminExists) {
+                      companyAdminValid = true;
+                      break;
+                    }
+                  }
+                }
+              }
+            } catch (error: any) {
+              if (error?.code === 'ENOTFOUND' || error?.code === 'ECONNREFUSED') {
+                continue;
+              }
+              // Continue to next URL
+            }
+          }
+          
+          if (companyAdminValid && company) {
+            // Valid Company Admin
+            res.locals.isCompanyAdmin = true;
+            res.locals.companyAdminId = decoded.companyAdminId;
+            res.locals.companyAdminEmail = companyAdminEmail;
+            res.locals.companyAdminName = decoded.companyAdminName;
+            res.locals.company = company;
+            res.locals.companyId = companyId;
+            res.locals.companyApiKey = companyApiKey;
+            res.locals.companyName = decoded.companyName || company.companyName;
+            res.locals.companyEmail = company.companyEmail;
+            res.locals.isMerchant = true; // Company admins have merchant-level access
+            return next();
+          }
+        }
       }
     } catch (error) {
-      // Token invalid or not an admin, continue to check merchant
+      // Token invalid, continue to check merchant API key
     }
   }
 
   // Check if merchant (API key validated by gateway)
-  const company = res.locals.company;
+  let company = await resolveCompanyFromContext(req, res);
+
   if (company && (company._id || company.id) && company.companyApiKey) {
     res.locals.isMerchant = true;
     res.locals.companyId = company._id?.toString() || company.id?.toString();
@@ -162,10 +295,10 @@ export const verifyAdminOrMerchant = async (req: Request, res: Response, next: N
     return next();
   }
 
-  // Neither admin nor merchant
+  // Neither admin nor merchant nor company admin
   return res.status(403).json({
     message: 'Access denied',
-    error: 'Valid admin token or company API key is required'
+    error: 'Valid admin token, company admin token, or company API key is required'
   });
 };
 

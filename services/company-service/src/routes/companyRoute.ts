@@ -148,7 +148,11 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
 // Company Admin Login endpoint (to login a company admin)
 router.post('/company-admin/login', async (req: Request, res: Response) => {
   const companyApiKey = req.headers['your_company_api_key'] as string;
+  const startTime = Date.now();
+  
   try {
+    console.log(`[Login] Starting login attempt for API key: ${companyApiKey?.substring(0, 10)}...`);
+    
     const { companyAdminEmail, companyAdminPassword } = req.body;
     if (!companyAdminEmail || !companyAdminPassword || !companyApiKey) {
       return res.status(400).json({
@@ -162,33 +166,82 @@ router.post('/company-admin/login', async (req: Request, res: Response) => {
     }
 
     // Check if company exists and is verified by checking the API key in the header (your_company_api_key) in the Company model in the companyDB.
-    const companyExists = await Company.findOne({ companyApiKey: companyApiKey });
+    console.log(`[Login] Querying database for company with API key...`);
+    const dbQueryStart = Date.now();
+    
+    // Add maxTimeMS to prevent queries from hanging indefinitely
+    const companyExists = await Company.findOne({ companyApiKey: companyApiKey })
+      .maxTimeMS(10000) // 10 second timeout for the query
+      .lean()
+      .exec();
+    
+    console.log(`[Login] Database query took ${Date.now() - dbQueryStart}ms`);
+    
     if (!companyExists || !companyExists.isVerified) {
+      console.log(`[Login] Company not found or not verified`);
       return res.status(401).json({ message: 'Invalid credentials', error: 'Company not found with this API key or company is not verified' });
     }
+    
+    console.log(`[Login] Company found: ${companyExists.companyName}`);
+    
     // Checks if the company admin exists in the companyAdminIDDetails array in the Company model in the companyDB.
-    const companyAdminExists = companyExists.companyAdminIDDetails.find((admin: { companyAdminEmail: string }) => admin.companyAdminEmail === companyAdminEmail);
+    const passwordCheckStart = Date.now();
+    const companyAdminExists = (companyExists.companyAdminIDDetails || []).find(
+      (admin: { companyAdminEmail: string }) => admin.companyAdminEmail.toLowerCase() === companyAdminEmail.toLowerCase()
+    );
+    
     if (!companyAdminExists) {
+      console.log(`[Login] Admin not found for email: ${companyAdminEmail}`);
       return res.status(401).json({ message: 'Invalid credentials', error: 'Company admin not found with this email' });
     }
+    
+    console.log(`[Login] Admin found, verifying password...`);
+    
     // Verifies the company admin password (supports bcrypt and scrypt hashed values)
     const isPasswordValid = await verifyPassword(companyAdminPassword, companyAdminExists.companyAdminPassword);
+    console.log(`[Login] Password verification took ${Date.now() - passwordCheckStart}ms`);
+    
     if (!isPasswordValid) {
+      console.log(`[Login] Invalid password`);
       return res.status(401).json({ message: 'Invalid credentials', error: 'Incorrect password' });
     }
-    // Generates JWT token
+    
+    console.log(`[Login] Password valid, generating token...`);
+    
+    // Generates JWT token with company information
     const token = jwt.sign(
       {
-        companyAdminId: companyExists.companyAdminIDDetails.findIndex((admin: { companyAdminEmail: string }) => admin.companyAdminEmail === companyAdminEmail),
-        companyAdminEmail: companyAdminEmail,
-        companyAdminName: companyAdminExists.companyAdminName
+        companyAdminId: (companyExists.companyAdminIDDetails || []).findIndex(
+          (admin: { companyAdminEmail: string }) => admin.companyAdminEmail.toLowerCase() === companyAdminEmail.toLowerCase()
+        ),
+        companyAdminEmail: companyAdminEmail.toLowerCase(),
+        companyAdminName: companyAdminExists.companyAdminName,
+        companyId: companyExists._id.toString(),
+        companyApiKey: companyExists.companyApiKey,
+        companyName: companyExists.companyName
       } as JwtPayload,
       process.env.JWT_SECRET!,
       { expiresIn: '24h' }
     );
-    res.status(200).json({ message: 'Login successful', token: token, companyAdmin: { companyAdminName: companyAdminExists.companyAdminName, companyAdminEmail: companyAdminExists.companyAdminEmail } });
+    
+    console.log(`[Login] Login successful in ${Date.now() - startTime}ms`);
+    
+    res.status(200).json({ 
+      message: 'Login successful', 
+      token: token, 
+      companyAdmin: { 
+        companyAdminName: companyAdminExists.companyAdminName, 
+        companyAdminEmail: companyAdminExists.companyAdminEmail 
+      } 
+    });
   } catch (error: any) {
-    res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+    console.error(`[Login] Error after ${Date.now() - startTime}ms:`, error);
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        message: 'Internal server error', 
+        error: error?.message || 'An unknown error occurred' 
+      });
+    }
   }
 })
 

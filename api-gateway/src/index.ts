@@ -58,6 +58,21 @@ const orderProxy: RequestHandler = createProxyMiddleware({
   pathRewrite: { '^/order': '' },
   onProxyReq: (proxyReq, req: any, res) => {
     console.log(`[API Gateway] Proxying ${req.method} ${req.url} to order-service`);
+
+    // Forward verified company headers when available
+    if (req.headers['x-company-id']) {
+      proxyReq.setHeader('x-company-id', req.headers['x-company-id']);
+    }
+    if (req.headers['x-company-api-key']) {
+      proxyReq.setHeader('x-company-api-key', req.headers['x-company-api-key']);
+    }
+    if (req.headers['x-company-name']) {
+      proxyReq.setHeader('x-company-name', req.headers['x-company-name']);
+    }
+    if (req.headers['x-company-email']) {
+      proxyReq.setHeader('x-company-email', req.headers['x-company-email']);
+    }
+
     // If body was parsed by any middleware, re-stream it to the target
     if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE')) {
       const bodyData = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
@@ -78,6 +93,20 @@ const ordersProxy: RequestHandler = createProxyMiddleware({
   // Don't rewrite path - keep /orders as is
   onProxyReq: (proxyReq, req: any, res) => {
     console.log(`[API Gateway] Proxying ${req.method} ${req.url} to order-service`);
+
+    if (req.headers['x-company-id']) {
+      proxyReq.setHeader('x-company-id', req.headers['x-company-id']);
+    }
+    if (req.headers['x-company-api-key']) {
+      proxyReq.setHeader('x-company-api-key', req.headers['x-company-api-key']);
+    }
+    if (req.headers['x-company-name']) {
+      proxyReq.setHeader('x-company-name', req.headers['x-company-name']);
+    }
+    if (req.headers['x-company-email']) {
+      proxyReq.setHeader('x-company-email', req.headers['x-company-email']);
+    }
+
     // If body was parsed by any middleware, re-stream it to the target
     if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE')) {
       const bodyData = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
@@ -98,7 +127,47 @@ const ticketProxy: RequestHandler = createProxyMiddleware({
 const companyProxy: RequestHandler = createProxyMiddleware({ 
   target: process.env.COMPANY_SERVICE_URL as string || 'http://company-service:4004', 
   changeOrigin: true,
-  pathRewrite: { '^/company': '' }
+  pathRewrite: { '^/company': '' },
+  timeout: 60000, // 60 seconds timeout
+  proxyTimeout: 60000, // 60 seconds proxy timeout
+  onError: (err, _req, res) => {
+    console.error('Company service proxy error:', err.message);
+    if (!res.headersSent) {
+      res.status(503).json({ 
+        error: 'Company service unavailable', 
+        message: 'Unable to connect to company service. Please check if the service is running.',
+        details: err.message 
+      });
+    }
+  },
+  onProxyReq: (proxyReq, req: any, res) => {
+    console.log(`[API Gateway] Proxying ${req.method} ${req.url} to company-service`);
+    // Forward headers that might be needed by company service
+    if (req.headers['your_company_api_key']) {
+      proxyReq.setHeader('your_company_api_key', req.headers['your_company_api_key']);
+    }
+    if (req.headers['company_to_add_admin_email_to']) {
+      proxyReq.setHeader('company_to_add_admin_email_to', req.headers['company_to_add_admin_email_to']);
+    }
+    // Forward authorization header for CF admin tokens
+    if (req.headers['authorization']) {
+      proxyReq.setHeader('authorization', req.headers['authorization']);
+    }
+    // If body was parsed by any middleware, re-stream it to the target
+    if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE')) {
+      const bodyData = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      if (!proxyReq.getHeader('Content-Type')) {
+        proxyReq.setHeader('Content-Type', 'application/json');
+      }
+      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+      proxyReq.write(bodyData);
+      proxyReq.end();
+    }
+  },
+  onProxyRes: (proxyRes, req, res) => {
+    console.log(`[API Gateway] Received response from company-service: ${proxyRes.statusCode} for ${req.method} ${req.url}`);
+  },
+  logLevel: 'warn'
 });
 const notificationProxy: RequestHandler = createProxyMiddleware({ 
   target: process.env.NOTIFICATION_SERVICE_URL as string || 'http://notification-service:4005',   
@@ -131,12 +200,26 @@ app.use('/auth', authProxy);
 // POST /orders/customer - Customers can get their orders in their mail by providing their email (email in body)
 app.post('/orders/customer', ordersProxy);
 
+// Public company routes (no API key required) - must come BEFORE protected /company route to avoid conflicts
+// These routes validate the API key internally, so they don't need gateway validation
+app.post('/company/register', companyProxy);
+app.post('/company/company-admin/register', companyProxy);
+app.post('/company/company-admin/login', companyProxy);
+app.get('/company/company-admin/verify-token', companyProxy);
+app.get('/company/verify-key', companyProxy);
+
+// CF Admin routes (protected by verifyCFAdminToken in service, no API key required)
+// These routes only require CF Admin JWT token, not company API key
+app.get('/company/companies', companyProxy);
+app.post('/company/add-admin-email-to-company', companyProxy);
+
 // Services routes that are protected by validateApiKey middleware (API key validation)
 // Route /orders (plural) for getting/managing orders - must come AFTER customer route to avoid conflicts
 app.use('/orders', checkInvalidApiKeyBan( 'order' ), validateApiKey, ordersProxy);
 // Route /order (singular) for creating orders
 app.use('/order', checkInvalidApiKeyBan( 'order' ), validateApiKey, orderProxy);
 app.use('/ticket', checkInvalidApiKeyBan( 'ticket' ), validateApiKey, ticketProxy);
+// Protected company routes (API key required) - must come AFTER public routes to avoid conflicts
 app.use('/company', checkInvalidApiKeyBan( 'company' ), validateApiKey, companyProxy);
 app.use('/notify', checkInvalidApiKeyBan( 'notify' ), validateApiKey, notificationProxy);
 

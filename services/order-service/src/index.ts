@@ -50,10 +50,17 @@ const connectToMongoDB = async () => {
 // Start MongoDB connection (non-blocking)
 connectToMongoDB();
 
-// Connect Kafka producer
-connectKafkaProducer().catch((error) => {
-  console.error('❌ Failed to connect Kafka producer on startup:', error);
-});
+// Connect Kafka producer with retry logic (non-blocking)
+const connectKafkaWithRetry = async () => {
+  const connected = await connectKafkaProducer();
+  if (!connected) {
+    console.log('⚠️  Retrying Kafka connection in 5 seconds...');
+    // Retry connection after 5 seconds
+    setTimeout(connectKafkaWithRetry, 5000);
+  }
+};
+
+connectKafkaWithRetry();
 
 // Start order deletion scheduler
 scheduleOrderDeletion();

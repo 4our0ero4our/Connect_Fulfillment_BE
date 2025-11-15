@@ -22,7 +22,6 @@ export enum OrderStatus {
   PENDING = 'pending',
   PROCESSING = 'processing',
   PACKED = 'packed',
-  READY_FOR_PICKUP = 'ready_for_pickup',
   COMPLETED = 'completed',
   CANCELLED = 'cancelled',
   DELETED = 'deleted',
@@ -142,10 +141,10 @@ OrderSchema.index({ createdAt: -1 }); // For sorting by date (general)
 
 // Generate unique order number before saving
 // Using a combination of timestamp and random number to ensure uniqueness
-OrderSchema.pre<IOrder>('save', async function (next) {
+OrderSchema.pre<IOrder>('validate', function (next) {
   if (!this.orderNumber) {
     const year = new Date().getFullYear();
-    const timestamp = Date.now().toString().slice(-6); // Last 6 digits of timestamp
+    const timestamp = Date.now().toString().slice(-6); 
     const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     this.orderNumber = `ORD-${year}-${timestamp}${random}`;
   }

@@ -1,0 +1,69 @@
+I have singlehandedly built and collaborated on several significant projects, one of which is Connect Fulfillment—a SaaS order fulfillment platform I'm currently developing. This project has been particularly challenging and rewarding, demonstrating my full-stack capabilities.
+
+**Project Overview:**
+Connect Fulfillment is a microservices-based platform that connects verified merchants with customers and manages end-to-end order fulfillment. The platform serves three distinct user types: Connect Fulfillment administrators, merchant administrators, and end customers, each with their own dashboards and access levels.
+
+**Tech Stack:**
+
+**Backend:**
+- Node.js with Express.js
+- TypeScript (strict type checking enforced across all services)
+- MongoDB with Mongoose ODM (multi-database architecture for service isolation)
+- Apache Kafka (event-driven architecture for asynchronous inter-service communication)
+- Redis (caching and rate limiting)
+- Docker & Docker Compose (containerization and orchestration)
+- Microservices architecture (6 independent services: API Gateway, Auth, Company, Order, Ticket, Notification)
+
+**Frontend:**
+- React/Next.js with TypeScript (landing page and admin dashboards)
+- Consistent type safety across the entire stack
+
+**Key Features Implemented:**
+
+1. **Multi-Tenant Authentication & Authorization**: I implemented three different authentication methods—JWT tokens for platform admins, JWT tokens for company admins, and API keys for merchant systems—with comprehensive role-based access control (RBAC) ensuring complete data isolation between tenants.
+
+2. **Event-Driven Architecture**: Integrated Apache Kafka for asynchronous communication between services, enabling decoupled, scalable microservices that communicate through events like `order_created`, `order_status_updated`, and `ticket_attached_to_order`. This allows services to scale independently and handle failures gracefully.
+
+3. **Comprehensive Order Management System**: Built a full CRUD system with order status lifecycle management (pending → processing → packed → completed), soft deletion for analytics and data retention, automated order deletion based on merchant-configurable settings, and backend pagination for optimal performance.
+
+4. **Robust Security Implementation**: This was one of the most challenging aspects. I implemented API key validation with aggressive rate limiting (3 invalid attempts → 3-hour ban per IP/route), JWT token verification with role-based middleware, password hashing with bcrypt/scrypt fallback, request validation and sanitization, and company context verification to prevent cross-tenant data access.
+
+5. **Scalability & Performance**: Designed for horizontal scaling with Redis caching for rate limiting and performance optimization, database indexing for efficient queries, Docker containerization for easy deployment, and independent service scaling capabilities.
+
+**My Role:**
+I architected and implemented the entire backend infrastructure singlehandedly, including:
+- Designed and built all 6 microservices from scratch
+- Implemented authentication and authorization systems
+- Created comprehensive API documentation
+- Set up Docker containerization and service orchestration
+- Integrated Kafka for event-driven communication
+- Implemented security middleware and rate limiting
+- Developed the frontend landing page and admin dashboards
+
+**Major Challenges & Solutions:**
+
+1. **Inter-Service Communication**: Services were failing to communicate due to Docker networking issues and local development environment differences. I solved this by implementing a fallback mechanism that attempts multiple service URLs (environment variables, Docker internal URLs, localhost), ensuring reliable communication in both Docker and local environments.
+
+2. **Complex Authentication & Authorization**: Managing three different authentication methods while preventing cross-tenant data access was extremely challenging. I created modular, reusable middleware for each authentication type and a unified middleware that supports all three methods. I also implemented company context validation to ensure data isolation and token payload validation to distinguish between different admin types.
+
+3. **Data Consistency Across Services**: Maintaining data consistency when orders are created, updated, or deleted across multiple services required careful design. I implemented an event-driven architecture with Kafka where, for example, when an order status changes to "packed", the Order Service publishes an event that the Ticket Service consumes to generate a QR code, ensuring consistency through asynchronous events.
+
+4. **Security & Rate Limiting**: Protecting the platform from abuse while maintaining good user experience required careful balancing. I implemented Redis-based rate limiting with different strategies—general rate limiting for auth endpoints (5 requests per minute) and aggressive rate limiting for invalid API key attempts (3 attempts → 3-hour ban per IP/route). This prevents brute force attacks while not blocking legitimate users.
+
+5. **Order Attribution & Multi-Tenancy**: Ensuring orders are correctly attributed to companies and preventing merchants from accessing other companies' orders, even with valid API keys, was critical for security. I implemented secure company ID extraction from API key validation (never from request body to prevent spoofing), added middleware that validates company context before allowing access, and created `verifyOrderAccess` middleware that checks order ownership before allowing any operations.
+
+6. **Type Safety & Error Handling**: Maintaining type safety across microservices while providing meaningful error messages required careful planning. I enforced TypeScript strict mode across all services, created comprehensive interface definitions for all data models, implemented consistent error response formats, and used Mongoose schemas with TypeScript interfaces for database models.
+
+7. **Automated Order Deletion**: Implementing scheduled jobs that automatically delete orders based on merchant-configurable settings (days to delete, deletion time) while ensuring data isolation was complex. I created a scheduled job using Node.js cron that runs every hour, implemented company-specific deletion settings in the Company model, added validation to ensure only uncompleted orders are deleted, and used MongoDB queries with companyId filtering to ensure complete data isolation.
+
+**Technical Highlights:**
+- Strict TypeScript enforcement across frontend and backend for type safety
+- Multi-layer security with authentication, authorization, and rate limiting
+- Scalable microservices architecture with event-driven communication
+- Performance optimization through Redis caching, database indexing, and backend pagination
+- Comprehensive API documentation and Docker containerization for developer experience
+
+This project has been the most challenging aspect of my work, particularly the security implementation for platform admins, merchant admins, and users. However, it has also been the most rewarding, as it demonstrates my ability to architect complex systems, implement security best practices, solve challenging technical problems, and deliver a production-ready SaaS platform that can scale with business growth.
+
+
+
