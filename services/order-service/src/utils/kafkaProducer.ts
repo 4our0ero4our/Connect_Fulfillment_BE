@@ -4,8 +4,10 @@ import { Kafka } from 'kafkajs';
 const kafka = new Kafka({
   clientId: 'order-service',
   brokers: (process.env.KAFKA_BROKERS || 'kafka:9092').split(','),
+  connectionTimeout: 10000, // 10 seconds connection timeout
+  requestTimeout: 30000, // 30 seconds request timeout
   retry: {
-    initialRetryTime: 100,
+    initialRetryTime: 300,
     retries: 8,
     maxRetryTime: 30000,
   },
@@ -49,16 +51,26 @@ const ensureConnected = async (forceReconnect: boolean = false): Promise<boolean
     isConnecting = false;
     
     // Check if error is because already connected (this is actually fine)
-    if (error.message?.includes('already connected') || error.code === 'ECONNREFUSED') {
-      // If it says already connected, we can consider it connected
-      // But if it's a connection refused, we should retry
-      if (error.message?.includes('already connected')) {
-        isConnected = true;
-        return true;
-      }
+    if (error.message?.includes('already connected')) {
+      isConnected = true;
+      return true;
     }
     
-    console.error('❌ Failed to connect Kafka producer:', error.message || error);
+    // Handle DNS resolution errors (ENOTFOUND) and connection errors
+    const errorMessage = error?.message || '';
+    const errorCode = error?.code || '';
+    const isDnsError = errorCode === 'ENOTFOUND' || errorMessage.includes('getaddrinfo ENOTFOUND');
+    const isConnectionError = errorCode === 'ECONNREFUSED' || errorCode === 'ETIMEDOUT' || 
+                               errorMessage.includes('Connection timeout') || 
+                               errorMessage.includes('Connection error');
+    
+    if (isDnsError || isConnectionError) {
+      console.error(`❌ Failed to connect Kafka producer: ${errorCode || 'Connection error'} - ${errorMessage}`);
+      console.log('⚠️  This usually means Kafka is not ready yet. Will retry...');
+    } else {
+      console.error('❌ Failed to connect Kafka producer:', errorMessage || error);
+    }
+    
     return false;
   }
 };
@@ -108,14 +120,21 @@ const sendWithRetry = async (
     } catch (error: any) {
       retryCount++;
       
-      // Check if error is due to disconnection
+      // Check if error is due to disconnection or connection issues
       // KafkaJS throws errors with specific messages when producer is disconnected
       const errorMessage = error?.message?.toLowerCase() || '';
+      const errorCode = error?.code || '';
+      const isDnsError = errorCode === 'ENOTFOUND' || errorMessage.includes('getaddrinfo enotfound');
+      const isConnectionError = errorCode === 'ECONNREFUSED' || errorCode === 'ETIMEDOUT' || 
+                                errorMessage.includes('connection timeout') ||
+                                errorMessage.includes('connection error');
       const isDisconnectionError = 
         errorMessage.includes('disconnected') ||
         errorMessage.includes('connection closed') ||
         errorMessage.includes('the producer is disconnected') ||
         errorMessage.includes('not connected') ||
+        isDnsError ||
+        isConnectionError ||
         error?.type === 'KafkaJSError' ||
         error?.name === 'KafkaJSError';
 
@@ -272,12 +291,20 @@ export const publishOrderDeleted = async (orderData: {
 // Publish ticket_attached_to_order event to Kafka
 // This event is published when Ticket Service attaches a ticketId to an order
 // Notification Service consumes this to send ticket/QR code emails to customers
+// If isReplacement is true, Notification Service will send a different email indicating ticket was updated
 export const publishTicketAttached = async (orderData: {
   orderId: string;
   orderNumber: string;
   companyId: string;
   companyName: string;
   ticketId: string;
+  oldTicketId?: string;
+  isReplacement?: boolean;
+  replacedBy?: {
+    adminEmail: string;
+    adminId: string;
+    adminName?: string;
+  };
   customerInfo: {
     customerName: string;
     customerEmail: string;
@@ -310,7 +337,11 @@ export const publishTicketAttached = async (orderData: {
       'ticket_attached_to_order'
     );
 
-    console.log(`✅ Published ticket_attached_to_order event for order ${orderData.orderNumber} with ticket ${orderData.ticketId}`);
+    if (orderData.isReplacement) {
+      console.log(`✅ Published ticket_attached_to_order event (REPLACEMENT) for order ${orderData.orderNumber}: ${orderData.oldTicketId} → ${orderData.ticketId}`);
+    } else {
+      console.log(`✅ Published ticket_attached_to_order event for order ${orderData.orderNumber} with ticket ${orderData.ticketId}`);
+    }
   } catch (error: any) {
     console.error('❌ Failed to publish ticket_attached_to_order event:', error.message || error);
   }

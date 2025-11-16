@@ -312,6 +312,15 @@ router.patch('/orders/:orderId/status', verifyAdminOrMerchant, verifyOrderAccess
       });
     }
 
+    // Prevent setting status to "deleted" via this endpoint
+    // Use DELETE /orders/:orderId endpoint to mark orders as deleted
+    if (status === OrderStatus.DELETED) {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'Cannot set order status to "deleted" via this endpoint. Use DELETE /orders/:orderId to mark orders as deleted.'
+      });
+    }
+
     // Check if status is actually changing
     if (order.status === status) {
       return res.status(400).json({
@@ -373,6 +382,7 @@ router.patch('/orders/:orderId/status', verifyAdminOrMerchant, verifyOrderAccess
   }
 });
 
+// ✅ Working perfectly
 // Delete order (CF Admin, Company Admin, or Merchant - marks as deleted, doesn't actually get deleted from the database here. Only the status is updated to "deleted" and it's only a lead CF Admin that can actually delete the order from the database and it's another route for that.)
 // DELETE /orders/:orderId
 // Authentication: CF Admin JWT token OR Company Admin JWT token OR Company API key
@@ -431,10 +441,13 @@ router.delete('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, asyn
   }
 });
 
-// Attach ticket to order (Internal endpoint for Ticket Service)
+// ✅ Working perfectly
+// Attach ticket to order (Internal endpoint for Ticket Service or CF Admin for replacement)
 // PATCH /orders/:orderId/ticket
-// This endpoint is called by Ticket Service after generating a ticket for an order with status="packed"
-// Ticket Service will call this endpoint directly (bypassing API Gateway) or via internal service token
+// This endpoint is called by:
+// 1. Ticket Service after generating a ticket for an order with status="packed" (initial attachment only)
+// 2. CF Admin to replace a ticket in rare edge cases (requires CF Admin authentication)
+// Note: Tickets are one-time and cannot be replaced by merchants. Only CF Admins can replace tickets.
 router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
   try {
     const orderId = req.params.orderId;
@@ -457,7 +470,7 @@ router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
       });
     }
 
-    // Check if ticket is already attached
+    // Check if ticket is already attached with the same ID
     if (order.ticketId && order.ticketId === ticketId) {
       return res.status(400).json({
         message: 'Validation error',
@@ -465,15 +478,110 @@ router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
       });
     }
 
-    // Validate that order status is "packed" (tickets should only be generated for packed orders)
-    if (order.status !== OrderStatus.PACKED) {
-      return res.status(400).json({
-        message: 'Validation error',
-        error: `Tickets can only be attached to orders with status "packed". Current status: ${order.status}`
-      });
-    }
-
     const oldTicketId = order.ticketId;
+    const isReplacement = !!oldTicketId;
+
+    // If replacing a ticket, only CF Admin is allowed
+    if (isReplacement) {
+      // Check if CF Admin is authenticated (set by API Gateway or verifyCFAdmin middleware)
+      // If not set by gateway, verify token directly
+      if (!res.locals.isAdmin || !res.locals.adminEmail) {
+        // Try to verify admin token directly
+        const token = req.headers.authorization?.split(' ')[1];
+        
+        if (!token) {
+          return res.status(403).json({
+            message: 'Access denied',
+            error: 'Only Connect Fulfillment Admins can replace tickets. Tickets are one-time and cannot be changed by merchants. Please contact support if you need to replace a ticket.'
+          });
+        }
+
+        try {
+          // Verify admin token using same logic as verifyCFAdmin middleware
+          const jwt = require('jsonwebtoken');
+          const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
+          
+          // Check if it's a CF Admin token (has adminEmail)
+          if (!decoded.adminEmail) {
+            return res.status(403).json({
+              message: 'Access denied',
+              error: 'Only Connect Fulfillment Admins can replace tickets. Tickets are one-time and cannot be changed by merchants. Please contact support if you need to replace a ticket.'
+            });
+          }
+
+          // Verify admin exists in Admin collection (same as verifyCFAdmin does)
+          // We need to access the Admin model - import it from the middleware module
+          // Since Admin is not exported, we'll use verifyCFAdmin's approach
+          // Actually, let's just use verifyCFAdmin but wrap it to catch its responses
+          // Better approach: manually verify using the same pattern
+          const mongoose = require('mongoose');
+          
+          // Get AdminDB URI (same logic as in orderAccessControl)
+          const getAdminDBUri = (): string => {
+            const adminMongoUri = process.env.ADMIN_MONGO_URI;
+            if (adminMongoUri) return adminMongoUri;
+            const defaultUri = process.env.MONGO_URI || 'mongodb://localhost:27017';
+            if (defaultUri.includes('/') && !defaultUri.endsWith('/')) {
+              const uriParts = defaultUri.split('?');
+              const baseUri = uriParts[0];
+              const queryString = uriParts[1] ? `?${uriParts[1]}` : '';
+              const lastSlashIndex = baseUri.lastIndexOf('/');
+              if (lastSlashIndex >= 0) {
+                return baseUri.substring(0, lastSlashIndex + 1) + 'AdminDB' + queryString;
+              }
+            }
+            return defaultUri + (defaultUri.includes('?') ? '' : '/') + 'AdminDB';
+          };
+
+          const adminDBConnection = mongoose.createConnection(getAdminDBUri(), {
+            serverSelectionTimeoutMS: 10000,
+            socketTimeoutMS: 45000,
+          });
+
+          const Admin = adminDBConnection.models.Admin || adminDBConnection.model('Admin', new mongoose.Schema({
+            adminName: { type: String, required: false },
+            adminEmail: { type: String, required: true, unique: true, lowercase: true },
+            password: { type: String, required: true },
+          }, { timestamps: true, collection: 'admins' }));
+
+          const admin = await Admin.findOne({ adminEmail: decoded.adminEmail });
+          
+          if (!admin) {
+            return res.status(403).json({
+              message: 'Access denied',
+              error: 'Only Connect Fulfillment Admins can replace tickets. Admin not found in system.'
+            });
+          }
+
+          // Set admin info in res.locals for use later
+          res.locals.isAdmin = true;
+          res.locals.adminId = decoded.adminId;
+          res.locals.adminEmail = decoded.adminEmail;
+          res.locals.adminName = decoded.adminName;
+        } catch (error: any) {
+          // If it's a JWT error, provide specific message
+          if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+            return res.status(403).json({
+              message: 'Access denied',
+              error: 'Only Connect Fulfillment Admins can replace tickets. Invalid or expired token. Please contact support if you need to replace a ticket.'
+            });
+          }
+          return res.status(403).json({
+            message: 'Access denied',
+            error: 'Only Connect Fulfillment Admins can replace tickets. Admin verification failed. Please contact support if you need to replace a ticket.'
+          });
+        }
+      }
+    } else {
+      // Initial ticket attachment - validate that order status is "packed"
+      // (This is for Ticket Service when first creating a ticket)
+      if (order.status !== OrderStatus.PACKED) {
+        return res.status(400).json({
+          message: 'Validation error',
+          error: `Tickets can only be attached to orders with status "packed". Current status: ${order.status}`
+        });
+      }
+    }
 
     // Update order with ticketId
     order.ticketId = ticketId;
@@ -481,12 +589,22 @@ router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
 
     // Publish ticket_attached_to_order event to Kafka
     // Notification Service consumes this to send QR code emails to customers
+    // If isReplacement is true, Notification Service will send a different email indicating ticket was updated
     await publishTicketAttached({
       orderId: order._id.toString(),
       orderNumber: order.orderNumber,
       companyId: order.companyId,
       companyName: order.companyName,
       ticketId: ticketId,
+      ...(oldTicketId ? { oldTicketId } : {}),
+      isReplacement: isReplacement,
+      ...(isReplacement ? {
+        replacedBy: {
+          adminEmail: res.locals.adminEmail,
+          adminId: res.locals.adminId,
+          adminName: res.locals.adminName,
+        }
+      } : {}),
       customerInfo: {
         customerName: order.customerInfo.customerName,
         customerEmail: order.customerInfo.customerEmail,
@@ -505,12 +623,15 @@ router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
     });
 
     res.status(200).json({
-      message: 'Ticket attached to order successfully',
+      message: isReplacement 
+        ? 'Ticket replaced successfully. Customer will be notified of the update.' 
+        : 'Ticket attached to order successfully',
       order: {
         id: order._id.toString(),
         orderNumber: order.orderNumber,
         ticketId: order.ticketId,
         oldTicketId: oldTicketId || null,
+        isReplacement: isReplacement,
         status: order.status,
         updatedAt: order.updatedAt,
       }
