@@ -802,12 +802,12 @@ router.post('/orders/customer', async (req: Request, res: Response) => {
   }
 });
 
+// ✅ Working perfectly
 import { DeletedOrder } from '../models/DeletedOrder';
 import { verifyLeadCFAdmin } from '../middleware/orderAccessControl';
 
 // Hard delete order (Lead CF Admin only) - moves document to deleted_orders collection and removes from orders
 // Disabled for now (route commented out) but kept for testing/documentation purposes
-
 // DELETE /orders/:orderId/hard-delete
 router.delete('/orders/:orderId/hard-delete', verifyLeadCFAdmin, async (req: Request, res: Response) => {
 	try {

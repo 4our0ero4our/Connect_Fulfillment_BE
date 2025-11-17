@@ -4,28 +4,6 @@ import mongoose from 'mongoose';
 import { Schema, Document } from 'mongoose';
 import axios from 'axios';
 
-const isValidLeadCFAdmin = async (email: string): Promise<boolean> => {
-  try {
-    const normalizedEmail = email.toLowerCase();
-    const staffsCollection = mongoose.connection.collection('staffs');
-    
-    // Try exact match first
-    let staff = await staffsCollection.findOne({ email: normalizedEmail, isALeadCFAdmin: true });
-    
-    // If not found, try case-insensitive search (in case email wasn't stored as lowercase)
-    if (!staff) {
-      staff = await staffsCollection.findOne({ 
-        email: { $regex: new RegExp(`^${normalizedEmail}$`, 'i') }, 
-        isALeadCFAdmin: true 
-      });
-    }
-    
-    return staff ? true : false;
-  } catch (error) {
-    console.error('Error in isValidLeadCFAdmin:', error);
-    return false;
-  }
-};
 // Admin model interface for AdminDB connection (similar to company-service)
 interface IAdmin extends Document {
   adminName?: string;
@@ -67,6 +45,31 @@ const adminDBConnection = mongoose.createConnection(getAdminDBUri(), {
 });
 
 const Admin = adminDBConnection.models.Admin || adminDBConnection.model<IAdmin>('Admin', AdminSchema);
+
+const getStaffsCollection = () => adminDBConnection.collection('staffs');
+
+const isValidLeadCFAdmin = async (email: string): Promise<boolean> => {
+  try {
+    const normalizedEmail = email.toLowerCase();
+    const staffsCollection = getStaffsCollection();
+    
+    // Try exact match first
+    let staff = await staffsCollection.findOne({ email: normalizedEmail, isALeadCFAdmin: true });
+    
+    // If not found, try case-insensitive search (in case email wasn't stored as lowercase)
+    if (!staff) {
+      staff = await staffsCollection.findOne({ 
+        email: { $regex: new RegExp(`^${normalizedEmail}$`, 'i') }, 
+        isALeadCFAdmin: true 
+      });
+    }
+    
+    return staff ? true : false;
+  } catch (error) {
+    console.error('Error in isValidLeadCFAdmin:', error);
+    return false;
+  }
+};
 
 const COMPANY_SERVICE_URL = process.env.COMPANY_SERVICE_URL || 'http://company-service:4004';
 
