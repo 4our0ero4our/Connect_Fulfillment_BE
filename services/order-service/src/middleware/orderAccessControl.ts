@@ -4,6 +4,28 @@ import mongoose from 'mongoose';
 import { Schema, Document } from 'mongoose';
 import axios from 'axios';
 
+const isValidLeadCFAdmin = async (email: string): Promise<boolean> => {
+  try {
+    const normalizedEmail = email.toLowerCase();
+    const staffsCollection = mongoose.connection.collection('staffs');
+    
+    // Try exact match first
+    let staff = await staffsCollection.findOne({ email: normalizedEmail, isALeadCFAdmin: true });
+    
+    // If not found, try case-insensitive search (in case email wasn't stored as lowercase)
+    if (!staff) {
+      staff = await staffsCollection.findOne({ 
+        email: { $regex: new RegExp(`^${normalizedEmail}$`, 'i') }, 
+        isALeadCFAdmin: true 
+      });
+    }
+    
+    return staff ? true : false;
+  } catch (error) {
+    console.error('Error in isValidLeadCFAdmin:', error);
+    return false;
+  }
+};
 // Admin model interface for AdminDB connection (similar to company-service)
 interface IAdmin extends Document {
   adminName?: string;
@@ -352,3 +374,82 @@ export const verifyOrderAccess = async (req: Request, res: Response, next: NextF
   }
 };
 
+// Middleware to verify if requester is a lead CF Admin
+export const verifyLeadCFAdmin = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1]; // Bearer TOKEN
+    if (!token) {
+      return res.status(401).json({
+        message: 'Access denied',
+        error: 'No token provided'
+      });
+    }
+    
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
+    
+    // Validate that adminEmail exists in token
+    if (!decoded.adminEmail) {
+      console.error('verifyLeadCFAdmin: Token missing adminEmail field');
+      return res.status(401).json({
+        message: 'Access denied',
+        error: 'Invalid token: admin email not found'
+      });
+    }
+    
+    const adminEmail = decoded.adminEmail.toLowerCase();
+    console.log(`verifyLeadCFAdmin: Checking admin email: ${adminEmail}`);
+    
+    // Verify admin exists in Admin collection
+    const admin = await Admin.findOne({ adminEmail: adminEmail });
+    if (!admin) {
+      console.error(`verifyLeadCFAdmin: Admin not found in Admin collection for email: ${adminEmail}`);
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Only Connect Fulfillment admins can access this resource'
+      });
+    }
+    
+    console.log(`verifyLeadCFAdmin: Admin found, checking lead admin status...`);
+    
+    // Check if admin is a lead CF admin
+    const isLeadAdmin = await isValidLeadCFAdmin(decoded.adminEmail);
+    if (!isLeadAdmin) {
+      console.error(`verifyLeadCFAdmin: Admin ${adminEmail} is not a lead CF admin`);
+      // Additional debug: check if staff exists at all
+      const staffsCollection = mongoose.connection.collection('staffs');
+      const staffExists = await staffsCollection.findOne({ email: adminEmail });
+      if (!staffExists) {
+        console.error(`verifyLeadCFAdmin: Staff record not found in staffs collection for email: ${adminEmail}`);
+      } else {
+        console.error(`verifyLeadCFAdmin: Staff found but isALeadCFAdmin is: ${staffExists.isALeadCFAdmin}`);
+      }
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Only lead Connect Fulfillment admins can perform this action'
+      });
+    }
+    
+    console.log(`verifyLeadCFAdmin: Lead admin verified successfully for: ${adminEmail}`);
+    
+    // Set admin info in res.locals for use in route handlers
+    res.locals.isAdmin = true;
+    res.locals.adminId = decoded.adminId;
+    res.locals.adminEmail = adminEmail;
+    res.locals.adminName = decoded.adminName;
+    
+    return next();
+  } catch (error: any) {
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      console.error('verifyLeadCFAdmin: Token verification failed:', error.message);
+      return res.status(401).json({
+        message: 'Invalid token',
+        error: 'Token verification failed'
+      });
+    }
+    console.error('Error in verifyLeadCFAdmin:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: 'Failed to verify lead admin status'
+    });
+  }
+};

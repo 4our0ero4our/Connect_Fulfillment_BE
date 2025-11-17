@@ -802,58 +802,58 @@ router.post('/orders/customer', async (req: Request, res: Response) => {
   }
 });
 
-// import { DeletedOrder } from '../models/DeletedOrder';
-// import { verifyLeadCFAdmin } from '../middleware/orderAccessControl';
-//
+import { DeletedOrder } from '../models/DeletedOrder';
+import { verifyLeadCFAdmin } from '../middleware/orderAccessControl';
+
 // Hard delete order (Lead CF Admin only) - moves document to deleted_orders collection and removes from orders
 // Disabled for now (route commented out) but kept for testing/documentation purposes
-//
+
 // DELETE /orders/:orderId/hard-delete
-// router.delete('/orders/:orderId/hard-delete', verifyLeadCFAdmin, async (req: Request, res: Response) => {
-// 	try {
-// 		const orderId = req.params.orderId;
-// 		const order = await Order.findById(orderId);
-// 		if (!order) {
-// 			return res.status(404).json({
-// 				message: 'Order not found',
-// 				error: 'The order you are trying to delete does not exist'
-// 			});
-// 		}
-//
-// 		// Move order to deleted_orders collection with metadata
-// 		await DeletedOrder.create({
-// 			orderId: order._id.toString(),
-// 			orderNumber: order.orderNumber,
-// 			companyId: order.companyId,
-// 			companyApiKey: (order as any).companyApiKey,
-// 			companyName: order.companyName,
-// 			items: order.items,
-// 			customerInfo: order.customerInfo,
-// 			ticketId: order.ticketId,
-// 			statusBeforeDelete: order.status,
-// 			totalAmount: order.totalAmount,
-// 			currency: order.currency,
-// 			notes: order.notes,
-// 			createdAtOriginal: order.createdAt,
-// 			deletedAt: new Date(),
-// 			deletedBy: { adminEmail: res.locals.adminEmail, adminId: res.locals.adminId }
-// 		});
-//
-// 		// Remove from orders collection
-// 		await Order.findByIdAndDelete(orderId);
-//
-// 		return res.status(200).json({
-// 			message: 'Order hard-deleted successfully',
-// 			orderId: orderId,
-// 			orderNumber: order.orderNumber
-// 		});
-// 	} catch (error: any) {
-// 		console.error('Error hard-deleting order:', error);
-// 		return res.status(500).json({
-// 			message: 'Internal server error',
-// 			error: error?.message || 'An unknown error occurred'
-// 		});
-// 	}
-// });
+router.delete('/orders/:orderId/hard-delete', verifyLeadCFAdmin, async (req: Request, res: Response) => {
+	try {
+		const orderId = req.params.orderId;
+		const order = await Order.findById(orderId);
+		if (!order) {
+			return res.status(404).json({
+				message: 'Order not found',
+				error: 'The order you are trying to delete does not exist'
+			});
+		}
+
+		// Move order to deleted_orders collection with metadata
+		await DeletedOrder.create({
+			orderId: order._id.toString(),
+			orderNumber: order.orderNumber,
+			companyId: order.companyId,
+			companyApiKey: (order as any).companyApiKey,
+			companyName: order.companyName,
+			items: order.items,
+			customerInfo: order.customerInfo,
+			ticketId: order.ticketId,
+			statusBeforeDelete: order.status,
+			totalAmount: order.totalAmount,
+			currency: order.currency,
+			notes: order.notes,
+			createdAtOriginal: order.createdAt,
+			deletedAt: new Date(),
+			deletedBy: { adminEmail: res.locals.adminEmail, adminId: res.locals.adminId }
+		});
+
+		// Remove from orders collection
+		await Order.findByIdAndDelete(orderId);
+
+		return res.status(200).json({
+			message: 'Order hard-deleted successfully',
+			orderId: orderId,
+			orderNumber: order.orderNumber
+		});
+	} catch (error: any) {
+		console.error('Error hard-deleting order:', error);
+		return res.status(500).json({
+			message: 'Internal server error',
+			error: error?.message || 'An unknown error occurred'
+		});
+	}
+});
 
 export default router;
