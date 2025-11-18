@@ -645,6 +645,7 @@ router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
   }
 });
 
+// ✅ Working perfectly
 // Get all orders for a specific company (Admin only)
 // GET /orders/company/:companyId
 router.get('/orders/company/:companyId', verifyCFAdmin, async (req: Request, res: Response) => {
@@ -709,6 +710,7 @@ router.get('/orders/company/:companyId', verifyCFAdmin, async (req: Request, res
   }
 });
 
+// ✅ Working perfectly
 // Get orders for a customer by email (Public route - no auth required, just email verification)
 // POST /orders/customer
 // Body: customerEmail (required), companyId (optional)
