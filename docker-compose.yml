@@ -92,6 +92,7 @@ services:
       - KAFKA_BROKERS=kafka:9092
       - REDIS_URL=redis://redis:6379
       - JWT_SECRET=${JWT_SECRET:-wanna_know_what_this_is_yeah_fuck_off_man}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-cf_internal_dev_token}
     depends_on:
       - mongodb
       - kafka
@@ -109,6 +110,7 @@ services:
       - MONGO_URI=${TICKET_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/TicketDB?appName=404Cluster}
       - KAFKA_BROKERS=kafka:9092
       - REDIS_URL=redis://redis:6379
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-cf_internal_dev_token}
     depends_on:
       - mongodb
       - kafka
@@ -127,6 +129,8 @@ services:
       - KAFKA_BROKERS=kafka:9092
       - REDIS_URL=redis://redis:6379
       - JWT_SECRET=${JWT_SECRET:-wanna_know_what_this_is_yeah_fuck_off_man}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-cf_internal_dev_token}
+      - COMPANY_PORTAL_URL=${COMPANY_PORTAL_URL:-https://portal.connectfulfillment.dev}
     depends_on:
       - mongodb
       - kafka
@@ -141,6 +145,9 @@ services:
     environment:
       - SMTP_HOST=smtp.example.com
       - SMTP_USER=example
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-cf_internal_dev_token}
+      - COMPANY_PORTAL_URL=${COMPANY_PORTAL_URL:-https://portal.connectfulfillment.dev}
+      - CF_BRAND_LOGO_URL=${CF_BRAND_LOGO_URL:-https://dummyimage.com/200x60/1e3a8a/ffffff&text=Connect+Fulfillment}
     depends_on:
       - kafka
     networks:
@@ -152,4 +159,3 @@ volumes:
 networks:
   app-network:
     driver: bridge
-

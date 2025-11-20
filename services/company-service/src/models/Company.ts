@@ -13,7 +13,9 @@ export interface ICompany extends Document {
   companyCategory: string;
   companySubCategory: string;
   companyApiKey: string;
+  apiKeyActive: boolean;
   isVerified: boolean;
+  isActive: boolean;
   companyAdminEmails: string[];
   companyAdminIDDetails: { companyAdminName: string, companyAdminEmail: string, companyAdminPassword: string }[];
   orderDeletionSettings?: {
@@ -21,6 +23,9 @@ export interface ICompany extends Document {
     daysToDelete: number; // Number of days after which uncompleted orders should be deleted
     deletionTime: string; // Time of day to run deletion (format: "HH:mm" in 24-hour format, e.g., "21:00" for 9pm)
   };
+  onboardingTokenHash?: string | null;
+  onboardingTokenExpiresAt?: Date | null;
+  onboardingTokenUsedAt?: Date | null;
 }
 
 const CompanySchema: Schema = new Schema<ICompany>(
@@ -36,8 +41,10 @@ const CompanySchema: Schema = new Schema<ICompany>(
     companyCategory: { type: String, required: true, enum: ['Electronics', 'Clothing', 'Furniture', 'Other'] },
     companySubCategory: { type: String, required: true, enum: ['Electronics', 'Clothing', 'Furniture', 'Other'] },
     companyApiKey: { type: String, unique: true, sparse: true }, // Admin generates the API key for the company from the admin dashboard after approval of the company and will get it sent to them through mail afterwards.
+    apiKeyActive: { type: Boolean, default: true },
     // A Connect Fulfillment admin will verify the company after they register themselves then change their status to true.
     isVerified: { type: Boolean, default: false, required: true },
+    isActive: { type: Boolean, default: true },
     companyAdminEmails: { type: [String], default: [], required: true},
     companyAdminIDDetails: { type: [{ companyAdminName: String, companyAdminEmail: String, companyAdminPassword: String }], default: [], required: true},
     orderDeletionSettings: {
@@ -48,6 +55,9 @@ const CompanySchema: Schema = new Schema<ICompany>(
       },
       required: false,
     },
+    onboardingTokenHash: { type: String, required: false, select: false },
+    onboardingTokenExpiresAt: { type: Date, required: false },
+    onboardingTokenUsedAt: { type: Date, required: false },
   },
   { timestamps: true }
 );

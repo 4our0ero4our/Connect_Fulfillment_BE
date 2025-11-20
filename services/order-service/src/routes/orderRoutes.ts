@@ -448,7 +448,7 @@ router.delete('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, asyn
 // 1. Ticket Service after generating a ticket for an order with status="packed" (initial attachment only)
 // 2. CF Admin to replace a ticket in rare edge cases (requires CF Admin authentication)
 // Note: Tickets are one-time and cannot be replaced by merchants. Only CF Admins can replace tickets.
-router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
+router.patch('/orders/:orderId/ticket', verifyCFAdmin, async (req: Request, res: Response) => {
   try {
     const orderId = req.params.orderId;
     const { ticketId } = req.body;
@@ -479,13 +479,14 @@ router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
     }
 
     const oldTicketId = order.ticketId;
+    
     const isReplacement = !!oldTicketId;
 
     // If replacing a ticket, only CF Admin is allowed
     if (isReplacement) {
       // Check if CF Admin is authenticated (set by API Gateway or verifyCFAdmin middleware)
       // If not set by gateway, verify token directly
-      if (!res.locals.isAdmin || !res.locals.adminEmail) {
+      if (!res.locals.isCFAdmin || !res.locals.cfAdminEmail) {
         // Try to verify admin token directly
         const token = req.headers.authorization?.split(' ')[1];
         
@@ -555,9 +556,9 @@ router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
 
           // Set admin info in res.locals for use later
           res.locals.isAdmin = true;
-          res.locals.adminId = decoded.adminId;
-          res.locals.adminEmail = decoded.adminEmail;
-          res.locals.adminName = decoded.adminName;
+          res.locals.cfAdminId = decoded.cfAdminId;
+          res.locals.cfAdminEmail = decoded.cfAdminEmail;
+          res.locals.cfAdminName = decoded.cfAdminName;
         } catch (error: any) {
           // If it's a JWT error, provide specific message
           if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
@@ -568,7 +569,7 @@ router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
           }
           return res.status(403).json({
             message: 'Access denied',
-            error: 'Only Connect Fulfillment Admins can replace tickets. Admin verification failed. Please contact support if you need to replace a ticket.'
+            error: 'Only Connect Fulfillment Admins can replace tickets. CF Admin verification failed. Please contact support if you need to replace a ticket.'
           });
         }
       }
@@ -600,9 +601,9 @@ router.patch('/orders/:orderId/ticket', async (req: Request, res: Response) => {
       isReplacement: isReplacement,
       ...(isReplacement ? {
         replacedBy: {
-          adminEmail: res.locals.adminEmail,
-          adminId: res.locals.adminId,
-          adminName: res.locals.adminName,
+          adminEmail: res.locals.cfAdminEmail,
+          adminId: res.locals.cfAdminId,
+          adminName: res.locals.cfAdminName,
         }
       } : {}),
       customerInfo: {

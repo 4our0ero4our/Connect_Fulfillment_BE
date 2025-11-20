@@ -9,6 +9,12 @@ import mongoose from 'mongoose';
 import axios from 'axios';
 import { verifyCFAdminToken } from '../middleware/verifyCFAdminToken';
 import { verifyToken } from '../middleware/verifyToken';
+import {
+  publishCompanyAdminRemoved,
+  publishCompanyApiKeyStatusChanged,
+  publishCompanyStatusChanged,
+  publishCompanyVerified
+} from '../utils/kafkaPublisher';
 // Attempt to use bcryptjs if available; fallback to crypto.scrypt otherwise
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let bcrypt: any = null;
@@ -37,6 +43,17 @@ const verifyPassword = async (plainText: string, hashedValue: string): Promise<b
   }
 };
 const router = Router();
+const COMPANY_PORTAL_URL = (process.env.COMPANY_PORTAL_URL || 'https://portal.connectfulfillment.com').replace(/\/$/, '');
+
+const generateOnboardingToken = () => crypto.randomBytes(48).toString('hex');
+const hashToken = (token: string) => crypto.createHash('sha256').update(token).digest('hex');
+const maskApiKey = (apiKey?: string | null) => {
+  if (!apiKey) return '***';
+  if (apiKey.length <= 8) return `${apiKey.slice(0, 2)}••${apiKey.slice(-2)}`;
+  return `${apiKey.slice(0, 4)}••••${apiKey.slice(-4)}`;
+};
+
+const buildOnboardingLink = (token: string) => `${COMPANY_PORTAL_URL}/setup?token=${token}`;
 
 // ✅ Working perfectly 
 // Health check endpoint
@@ -373,6 +390,236 @@ router.post('/add-admin-email-to-company', verifyCFAdminToken, async (req: Reque
     });
   } catch (error: any) {
     console.error('Error adding admin email to company:', error);
+    return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
+
+// ✅ Verify or unverify company + issue onboarding token/link
+router.patch('/company/:companyId/verify', verifyCFAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { isVerified, regenerateToken } = req.body;
+    if (typeof isVerified !== 'boolean') {
+      return res.status(400).json({ message: 'isVerified field is required and must be boolean' });
+    }
+
+    const company = await Company.findById(req.params.companyId).select('+onboardingTokenHash');
+    if (!company) {
+      return res.status(404).json({ message: 'Company not found' });
+    }
+
+    const wasVerified = company.isVerified;
+    company.isVerified = isVerified;
+    let onboardingLink: string | null = null;
+    let tokenAssigned = false;
+
+    if (isVerified) {
+      if (!wasVerified || regenerateToken) {
+        const onboardingToken = generateOnboardingToken();
+        company.onboardingTokenHash = hashToken(onboardingToken);
+        company.onboardingTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        company.onboardingTokenUsedAt = null;
+        onboardingLink = buildOnboardingLink(onboardingToken);
+        tokenAssigned = true;
+      }
+    } else {
+      company.onboardingTokenHash = null;
+      company.onboardingTokenExpiresAt = null;
+      company.onboardingTokenUsedAt = null;
+    }
+
+    await company.save();
+
+    if (isVerified && tokenAssigned && onboardingLink) {
+      await publishCompanyVerified({
+        companyId: company._id.toString(),
+        companyName: company.companyName,
+        companyEmail: company.companyEmail,
+        onboardingLink,
+        apiKeyMasked: maskApiKey(company.companyApiKey)
+      });
+    }
+
+    return res.status(200).json({
+      message: `Company verification updated to ${isVerified}`,
+      company: {
+        id: company._id,
+        companyName: company.companyName,
+        isVerified: company.isVerified,
+        apiKeyMasked: maskApiKey(company.companyApiKey),
+        onboardingTokenExpiresAt: company.onboardingTokenExpiresAt
+      }
+    });
+  } catch (error: any) {
+    console.error('Error updating company verification:', error);
+    return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
+
+// ✅ Toggle API key status (active/inactive)
+router.patch('/company/:companyId/api-key/status', verifyCFAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { active } = req.body;
+    if (typeof active !== 'boolean') {
+      return res.status(400).json({ message: 'active field is required and must be boolean' });
+    }
+    const company = await Company.findById(req.params.companyId);
+    if (!company) {
+      return res.status(404).json({ message: 'Company not found' });
+    }
+    const previous = company.apiKeyActive;
+    company.apiKeyActive = active;
+    await company.save();
+
+    if (previous !== active) {
+      await publishCompanyApiKeyStatusChanged({
+        companyId: company._id.toString(),
+        companyName: company.companyName,
+        companyEmail: company.companyEmail,
+        status: active ? 'active' : 'inactive',
+        changerEmail: req.body.adminEmail
+      });
+    }
+
+    return res.status(200).json({
+      message: `Company API key status updated to ${active ? 'active' : 'inactive'}`,
+      company: {
+        id: company._id,
+        companyName: company.companyName,
+        apiKeyActive: company.apiKeyActive
+      }
+    });
+  } catch (error: any) {
+    console.error('Error updating API key status:', error);
+    return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
+
+// ✅ Activate/Deactivate merchant (company) account
+router.patch('/company/:companyId/status', verifyCFAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { isActive, reason } = req.body;
+    if (typeof isActive !== 'boolean') {
+      return res.status(400).json({ message: 'isActive field is required and must be boolean' });
+    }
+    const company = await Company.findById(req.params.companyId);
+    if (!company) {
+      return res.status(404).json({ message: 'Company not found' });
+    }
+    const previous = company.isActive;
+    company.isActive = isActive;
+    await company.save();
+
+    if (previous !== isActive) {
+      await publishCompanyStatusChanged({
+        companyId: company._id.toString(),
+        companyName: company.companyName,
+        companyEmail: company.companyEmail,
+        isActive,
+        reason,
+        changedBy: req.body.adminEmail
+      });
+    }
+
+    return res.status(200).json({
+      message: `Company status updated to ${isActive ? 'active' : 'inactive'}`,
+      company: {
+        id: company._id,
+        companyName: company.companyName,
+        isActive: company.isActive
+      }
+    });
+  } catch (error: any) {
+    console.error('Error updating company status:', error);
+    return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
+
+// ✅ Remove merchant admin
+router.delete('/company/company-admin', verifyCFAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { companyId, companyAdminEmail } = req.body;
+    if (!companyId || !companyAdminEmail) {
+      return res.status(400).json({ message: 'companyId and companyAdminEmail are required' });
+    }
+    const normalizedEmail = (companyAdminEmail as string).toLowerCase();
+    const company = await Company.findById(companyId);
+    if (!company) {
+      return res.status(404).json({ message: 'Company not found' });
+    }
+
+    const adminIndex = (company.companyAdminIDDetails || []).findIndex(
+      (admin: { companyAdminEmail: string }) => admin.companyAdminEmail?.toLowerCase() === normalizedEmail
+    );
+    if (adminIndex === -1) {
+      return res.status(404).json({ message: 'Company admin not found on this company' });
+    }
+
+    company.companyAdminIDDetails.splice(adminIndex, 1);
+    company.companyAdminEmails = (company.companyAdminEmails || []).filter(email => email.toLowerCase() !== normalizedEmail);
+    await company.save();
+
+    await publishCompanyAdminRemoved({
+      companyId: company._id.toString(),
+      companyName: company.companyName,
+      companyEmail: company.companyEmail,
+      adminEmail: normalizedEmail,
+      removedBy: {
+        adminEmail: req.body.adminEmail,
+        adminName: req.body.adminName
+      }
+    });
+
+    return res.status(200).json({
+      message: 'Company admin removed successfully',
+      company: {
+        id: company._id,
+        companyName: company.companyName,
+        remainingAdmins: company.companyAdminEmails?.length || 0
+      }
+    });
+  } catch (error: any) {
+    console.error('Error removing company admin:', error);
+    return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
+
+// ✅ Redeem onboarding token to fetch API key (one-time)
+router.get('/company/onboarding/:token', async (req: Request, res: Response) => {
+  try {
+    const { token } = req.params;
+    if (!token) {
+      return res.status(400).json({ message: 'Token is required' });
+    }
+    const tokenHash = hashToken(token);
+    const company = await Company.findOne({ onboardingTokenHash: tokenHash }).select('+onboardingTokenHash');
+    if (!company) {
+      return res.status(404).json({ message: 'Invalid or expired token' });
+    }
+    if (!company.onboardingTokenExpiresAt || company.onboardingTokenExpiresAt.getTime() < Date.now()) {
+      return res.status(410).json({ message: 'Token has expired. Please request a new onboarding link.' });
+    }
+    if (company.onboardingTokenUsedAt) {
+      return res.status(410).json({ message: 'This token has already been used.' });
+    }
+    if (!company.companyApiKey) {
+      return res.status(409).json({ message: 'Company API key not found. Please contact support.' });
+    }
+
+    company.onboardingTokenHash = null;
+    company.onboardingTokenUsedAt = new Date();
+    await company.save();
+
+    return res.status(200).json({
+      message: 'API key retrieved successfully. Store it securely because you will not be able to view it again.',
+      company: {
+        id: company._id,
+        companyName: company.companyName,
+        companyEmail: company.companyEmail
+      },
+      apiKey: company.companyApiKey
+    });
+  } catch (error: any) {
+    console.error('Error redeeming onboarding token:', error);
     return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
   }
 });
