@@ -83,7 +83,10 @@ router.post('/register', async (req: Request, res: Response) => {
         }
       });
     }
-    const { companyName, companyEmail, companyAddress, companyPhone, companyWebsite, companyLogo, companyDescription, companyDetails, companyCategory, companySubCategory, isVerified } = req.body;
+    const { companyName, companyEmail, companyAddress, companyPhone, companyWebsite, companyLogo, companyDescription, companyDetails, companyCategory, companySubCategory } = req.body;
+    
+    // Force isVerified to false - companies cannot self-verify
+    // Only CF Admins can verify companies via PATCH /company/:companyId/verify
 
     // Generates strong random API key
     const generateApiKey = () => `CFK_${crypto.randomBytes(48).toString('base64url')}`; // ~64 chars
@@ -97,7 +100,21 @@ router.post('/register', async (req: Request, res: Response) => {
       companyApiKey = generateApiKey();
     }
 
-    const company = await Company.create({ companyName, companyEmail, companyAddress, companyPhone, companyWebsite, companyLogo, companyDescription, companyDetails, companyCategory, companySubCategory, companyApiKey, isVerified });
+    // Create company with isVerified=false (default from schema, but explicitly set for clarity)
+    const company = await Company.create({ 
+      companyName, 
+      companyEmail, 
+      companyAddress, 
+      companyPhone, 
+      companyWebsite, 
+      companyLogo, 
+      companyDescription, 
+      companyDetails, 
+      companyCategory, 
+      companySubCategory, 
+      companyApiKey,
+      isVerified: false // Always false on registration!😤
+    });
 
     const companySafe = company.toObject();
     delete (companySafe as any).companyApiKey;
@@ -268,6 +285,52 @@ router.get('/companies', verifyCFAdminToken, async (_req: Request, res: Response
   // if (!req.body.company) return res.status(401).json({ message: 'Unauthorized' });
   const companyNames = await Company.find({}, 'companyName');
   res.status(200).json({ companyNames });
+});
+
+// ✅ Working perfectly
+// Get companies with deletion settings enabled (Internal service endpoint for order deletion scheduler)
+// GET /companies-with-deletion-settings
+// This endpoint returns companies that have order deletion settings enabled
+// Used by order-service scheduler to determine which companies' orders to auto-delete
+router.get('/companies-with-deletion-settings', async (req: Request, res: Response) => {
+  try {
+    // Verify internal service token if provided (optional for backward compatibility)
+    const internalToken = req.headers['x-internal-token'] || 
+                          req.headers['authorization']?.replace(/Bearer\s+/i, '') ||
+                          req.headers['x-service-secret'];
+    const expectedToken = process.env.INTERNAL_SERVICE_TOKEN;
+
+    if (expectedToken && internalToken !== expectedToken) {
+      return res.status(401).json({
+        message: 'Unauthorized',
+        error: 'Internal service token required'
+      });
+    }
+
+    // Find companies with deletion settings enabled
+    const companies = await Company.find({
+      'orderDeletionSettings.enabled': true,
+      isVerified: true, // Only verified companies
+      isActive: true, // Only active companies
+    }).select('_id companyName companyEmail orderDeletionSettings').lean();
+
+    res.status(200).json({
+      message: 'Companies with deletion settings retrieved successfully',
+      companies: companies.map(company => ({
+        _id: company._id,
+        companyName: company.companyName,
+        companyEmail: company.companyEmail,
+        orderDeletionSettings: company.orderDeletionSettings,
+      })),
+      count: companies.length,
+    });
+  } catch (error: any) {
+    console.error('Error fetching companies with deletion settings:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
 });
 
 // ✅ Working perfectly

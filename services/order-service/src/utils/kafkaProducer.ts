@@ -259,7 +259,7 @@ export const publishOrderStatusUpdated = async (orderData: {
   }
 };
 
-// Publish order_deleted event to Kafka
+// Publish order_deleted event to Kafka (hard delete - Lead CF Admin only)
 export const publishOrderDeleted = async (orderData: {
   orderId: string;
   orderNumber: string;
@@ -285,6 +285,50 @@ export const publishOrderDeleted = async (orderData: {
     console.log(`✅ Published order_deleted event for order ${orderData.orderNumber}`);
   } catch (error: any) {
     console.error('❌ Failed to publish order_deleted event:', error.message || error);
+  }
+};
+
+// Publish order_soft_deleted event to Kafka (soft delete - merchant/admin marks as deleted)
+// This is different from order_deleted which is hard delete (Lead CF Admin only)
+export const publishOrderSoftDeleted = async (orderData: {
+  orderId: string;
+  orderNumber: string;
+  companyId: string;
+  companyName: string;
+  oldStatus: string;
+  deletedAt: Date;
+  deletedBy?: {
+    type: 'merchant' | 'company_admin' | 'cf_admin';
+    email?: string;
+    id?: string;
+  };
+}) => {
+  try {
+    await sendWithRetry(
+      'order_soft_deleted',
+      [
+        {
+          key: orderData.orderId,
+          value: JSON.stringify({
+            orderId: orderData.orderId,
+            orderNumber: orderData.orderNumber,
+            companyId: orderData.companyId,
+            companyName: orderData.companyName,
+            status: 'deleted',
+            oldStatus: orderData.oldStatus,
+            timestamp: new Date().toISOString(),
+            deletedAt: orderData.deletedAt,
+            deletedBy: orderData.deletedBy,
+            eventType: 'order_soft_deleted',
+          }),
+        },
+      ],
+      'order_soft_deleted'
+    );
+
+    console.log(`✅ Published order_soft_deleted event for order ${orderData.orderNumber}`);
+  } catch (error: any) {
+    console.error('❌ Failed to publish order_soft_deleted event:', error.message || error);
   }
 };
 
@@ -349,7 +393,8 @@ export const publishTicketAttached = async (orderData: {
 
 
 // Summary of Kafka Events Published by Order Service:
-// 1. order_created - Published when a new order is created (consumed by Ticket Service for future ticket generation)
+// 1. order_created - Published when a new order is created
 // 2. order_status_updated - Published when order status changes (consumed by Ticket Service when status="packed" and Notification Service for status emails)
-// 3. order_deleted - Published when an order is soft-deleted (status changed to "deleted")
-// 4. ticket_attached_to_order - Published when Ticket Service attaches a ticketId to an order (consumed by Notification Service to send QR code emails)
+// 3. order_soft_deleted - Published when an order is soft-deleted by merchant/admin (status changed to "deleted", order still visible)
+// 4. order_deleted - Published when an order is hard-deleted by Lead CF Admin (moved to deleted_orders collection)
+// 5. ticket_attached_to_order - Published when Ticket Service attaches a ticketId to an order (consumed by Notification Service to send QR code emails)

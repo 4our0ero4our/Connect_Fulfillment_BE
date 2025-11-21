@@ -345,7 +345,13 @@ router.get('/profile', verifyCFAdminToken, (req: Request, res: Response) => {
     admin: {
       id: req.body.adminId,
       adminName: req.body.adminName,
-      adminEmail: req.body.adminEmail
+      adminEmail: req.body.adminEmail,
+      // Added these in case we need to display those details in the frontend
+      role: req.body.role,
+      canBeCFAdmin: req.body.canBeCFAdmin,
+      isALeadCFAdmin: req.body.isALeadCFAdmin,
+      createdAt: req.body.createdAt,
+      updatedAt: req.body.updatedAt
     }
   });
 });

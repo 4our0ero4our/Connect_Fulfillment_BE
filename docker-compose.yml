@@ -61,7 +61,7 @@ services:
       - notification-service
     environment:
       - NODE_ENV=development
-      - JWT_SECRET=${JWT_SECRET:-wanna_know_what_this_is_yeah_fuck_off_man}
+      - JWT_SECRET=${JWT_SECRET}
     networks:
       - app-network
 
@@ -70,11 +70,10 @@ services:
     ports:
       - "4001:4001"
     environment:
-      - MONGO_URI=${AUTH_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/AdminDB?appName=404Cluster}
+      - MONGO_URI=${AUTH_MONGO_URI}
       - REDIS_URL=redis://redis:6379
       - KAFKA_BROKERS=kafka:9092
-      - JWT_SECRET=${JWT_SECRET:-wanna_know_what_this_is_yeah_fuck_off_man}
-      - STAFF_EMAILS_COLLECTION=${STAFF_EMAILS_COLLECTION:-admin@connectfulfillment.com,manager@connectfulfillment.com,support@connectfulfillment.com,admin@connectfulfillment.co.uk}
+      - JWT_SECRET=${JWT_SECRET}
     depends_on:
       - mongodb
       - redis
@@ -87,12 +86,12 @@ services:
     ports:
       - "4002:4002"
     environment:
-      - MONGO_URI=${ORDER_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/OrderDB?appName=404Cluster}
-      - ADMIN_MONGO_URI=${AUTH_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/AdminDB?appName=404Cluster}
+      - MONGO_URI=${ORDER_MONGO_URI}
+      - ADMIN_MONGO_URI=${ADMIN_MONGO_URI}
       - KAFKA_BROKERS=kafka:9092
       - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET:-wanna_know_what_this_is_yeah_fuck_off_man}
-      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-cf_internal_dev_token}
+      - JWT_SECRET=${JWT_SECRET}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
     depends_on:
       - mongodb
       - kafka
@@ -107,10 +106,10 @@ services:
     environment:
       # MongoDB Atlas: Same cluster, different database
       # Define TICKET_MONGO_URI in your .env file
-      - MONGO_URI=${TICKET_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/TicketDB?appName=404Cluster}
+      - MONGO_URI=${TICKET_MONGO_URI}
       - KAFKA_BROKERS=kafka:9092
       - REDIS_URL=redis://redis:6379
-      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-cf_internal_dev_token}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
     depends_on:
       - mongodb
       - kafka
@@ -125,12 +124,12 @@ services:
     environment:
       # MongoDB Atlas: Same cluster, different database
       # Define COMPANY_MONGO_URI in your .env file
-      - MONGO_URI=${COMPANY_MONGO_URI:-mongodb+srv://404:20845129Ci@404cluster.bdp2cal.mongodb.net/CompanyDB?appName=404Cluster}
+      - MONGO_URI=${COMPANY_MONGO_URI}
       - KAFKA_BROKERS=kafka:9092
       - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET:-wanna_know_what_this_is_yeah_fuck_off_man}
-      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-cf_internal_dev_token}
-      - COMPANY_PORTAL_URL=${COMPANY_PORTAL_URL:-https://portal.connectfulfillment.dev}
+      - JWT_SECRET=${JWT_SECRET}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+      - COMPANY_PORTAL_URL=${COMPANY_PORTAL_URL}
     depends_on:
       - mongodb
       - kafka
@@ -143,11 +142,14 @@ services:
     ports:
       - "4005:4005"
     environment:
-      - SMTP_HOST=smtp.example.com
-      - SMTP_USER=example
-      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-cf_internal_dev_token}
-      - COMPANY_PORTAL_URL=${COMPANY_PORTAL_URL:-https://portal.connectfulfillment.dev}
-      - CF_BRAND_LOGO_URL=${CF_BRAND_LOGO_URL:-https://dummyimage.com/200x60/1e3a8a/ffffff&text=Connect+Fulfillment}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - NOTIFICATION_FROM=${NOTIFICATION_FROM}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+      - COMPANY_PORTAL_URL=${COMPANY_PORTAL_URL}
+      - CF_BRAND_LOGO_URL=${CF_BRAND_LOGO_URL}
     depends_on:
       - kafka
     networks:

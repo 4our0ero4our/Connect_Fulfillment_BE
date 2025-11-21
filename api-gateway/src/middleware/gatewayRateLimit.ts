@@ -35,6 +35,94 @@ export const rateLimit = (limit: number, windowSeconds: number, bucketName?: str
 
 export default rateLimit;
 
+// Anomaly Detection Rate Limiting
+// This detects abusive patterns instead of blanket rate limiting
+// Normal high-volume usage (e.g., many orders) is allowed, but suspicious patterns are flagged
+
+const ANOMALY_DETECTION_WINDOW = 60; // 1 minute window
+const NORMAL_REQUEST_THRESHOLD = 100; // 100 requests per minute is considered normal
+const SUSPICIOUS_PATTERN_THRESHOLD = 200; // 200+ requests per minute triggers investigation
+const BURST_THRESHOLD = 50; // 50 requests in 10 seconds is a burst
+const BURST_WINDOW = 10; // 10 seconds
+
+interface AnomalyPattern {
+  key: string;
+  requestCount: number;
+  burstCount: number;
+  lastRequestTime: number;
+  flagged: boolean;
+}
+
+const anomalyCache = new Map<string, AnomalyPattern>();
+
+// Clean up old entries periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, pattern] of anomalyCache.entries()) {
+    if (now - pattern.lastRequestTime > ANOMALY_DETECTION_WINDOW * 1000) {
+      anomalyCache.delete(key);
+    }
+  }
+}, 30000); // Clean every 30 seconds
+
+export const detectAnomalies = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const apiKey = req.headers['your_company_api_key'] as string;
+    const ip = getClientIp(req);
+    const key = apiKey ? `anomaly:api:${apiKey}` : `anomaly:ip:${ip}`;
+    const now = Date.now();
+
+    let pattern = anomalyCache.get(key);
+    if (!pattern) {
+      pattern = {
+        key,
+        requestCount: 0,
+        burstCount: 0,
+        lastRequestTime: now,
+        flagged: false,
+      };
+      anomalyCache.set(key, pattern);
+    }
+
+    // Reset burst count if more than BURST_WINDOW seconds have passed
+    if (now - pattern.lastRequestTime > BURST_WINDOW * 1000) {
+      pattern.burstCount = 0;
+    }
+
+    // Increment counters
+    pattern.requestCount++;
+    pattern.burstCount++;
+    pattern.lastRequestTime = now;
+
+    // Check for burst pattern (many requests in short time)
+    if (pattern.burstCount > BURST_THRESHOLD && !pattern.flagged) {
+      console.warn(`⚠️  Anomaly detected: Burst pattern for ${apiKey ? 'API key' : 'IP'} ${key} - ${pattern.burstCount} requests in ${BURST_WINDOW}s`);
+      pattern.flagged = true;
+      
+      // Log but don't block - allow legitimate high-volume usage
+      // In production, you might want to send alerts or temporarily throttle
+      return next();
+    }
+
+    // Check for sustained high-volume pattern
+    if (pattern.requestCount > SUSPICIOUS_PATTERN_THRESHOLD && !pattern.flagged) {
+      console.warn(`⚠️  Anomaly detected: High-volume pattern for ${apiKey ? 'API key' : 'IP'} ${key} - ${pattern.requestCount} requests in ${ANOMALY_DETECTION_WINDOW}s`);
+      pattern.flagged = true;
+      
+      // Log but don't block - this could be legitimate high-volume merchant
+      // In production, you might want to send alerts to admin dashboard
+      return next();
+    }
+
+    // Normal usage - allow through
+    return next();
+  } catch (err: any) {
+    // On error, fail open to avoid blocking legitimate traffic
+    console.error('Anomaly detection error:', err?.message || err);
+    return next();
+  }
+};
+
 // Invalid API key attempt tracking and ban enforcement
 
 const DEFAULT_INVALID_LIMIT = 3; // after 3 wrong trials

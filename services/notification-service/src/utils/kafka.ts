@@ -11,6 +11,7 @@ import {
   handleCompanyApiKeyStatusChanged,
   handleCompanyStatusChanged,
   handleCompanyAdminRemoved,
+  handleOrderSoftDeleted,
 } from '../services/notificationService';
 
 dotenv.config();
@@ -40,6 +41,7 @@ const topicHandlers: Record<string, (payload: any) => Promise<void>> = {
   company_api_key_status_changed: handleCompanyApiKeyStatusChanged,
   company_status_changed: handleCompanyStatusChanged,
   company_admin_removed: handleCompanyAdminRemoved,
+  order_soft_deleted: handleOrderSoftDeleted,
 };
 
 export const startNotificationConsumers = async () => {

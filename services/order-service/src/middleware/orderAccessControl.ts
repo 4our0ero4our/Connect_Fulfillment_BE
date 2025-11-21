@@ -48,6 +48,33 @@ const Admin = adminDBConnection.models.Admin || adminDBConnection.model<IAdmin>(
 
 const getStaffsCollection = () => adminDBConnection.collection('staffs');
 
+// Middleware to verify internal service requests (for ticket service auto-attachment)
+export const verifyInternalService = (req: Request, res: Response, next: NextFunction) => {
+  const expectedToken = process.env.INTERNAL_SERVICE_TOKEN;
+  if (!expectedToken) {
+    console.warn('INTERNAL_SERVICE_TOKEN not set. Skipping internal auth check.');
+    return next();
+  }
+
+  const providedToken =
+    req.headers['x-internal-token'] ||
+    req.headers['authorization']?.replace(/Bearer\s+/i, '') ||
+    req.headers['x-service-secret'] ||
+    req.headers['x-internal-service'];
+
+  const normalizedToken = Array.isArray(providedToken) ? providedToken[0] : providedToken;
+
+  if (normalizedToken === expectedToken) {
+    res.locals.isInternalService = true;
+    return next();
+  }
+
+  return res.status(401).json({
+    message: 'Unauthorized request',
+    error: 'Internal service token missing or invalid'
+  });
+};
+
 const isValidLeadCFAdmin = async (email: string): Promise<boolean> => {
   try {
     const normalizedEmail = email.toLowerCase();

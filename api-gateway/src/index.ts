@@ -2,7 +2,7 @@ import express, { NextFunction } from 'express';
 import { createProxyMiddleware, RequestHandler } from 'http-proxy-middleware';
 import { Request, Response } from 'express';
 import { validateApiKey } from './middleware/apiKeyValidator';
-import { checkInvalidApiKeyBan } from './middleware/gatewayRateLimit';
+import { checkInvalidApiKeyBan, detectAnomalies } from './middleware/gatewayRateLimit';
 
 const app = express();
 
@@ -214,13 +214,14 @@ app.get('/company/companies', companyProxy);
 app.post('/company/add-admin-email-to-company', companyProxy);
 
 // Services routes that are protected by validateApiKey middleware (API key validation)
+// Anomaly detection runs before validation to detect suspicious patterns without blocking normal high-volume usage
 // Route /orders (plural) for getting/managing orders - must come AFTER customer route to avoid conflicts
-app.use('/orders', checkInvalidApiKeyBan( 'order' ), validateApiKey, ordersProxy);
+app.use('/orders', checkInvalidApiKeyBan( 'order' ), detectAnomalies, validateApiKey, ordersProxy);
 // Route /order (singular) for creating orders
-app.use('/order', checkInvalidApiKeyBan( 'order' ), validateApiKey, orderProxy);
-app.use('/ticket', checkInvalidApiKeyBan( 'ticket' ), validateApiKey, ticketProxy);
+app.use('/order', checkInvalidApiKeyBan( 'order' ), detectAnomalies, validateApiKey, orderProxy);
+app.use('/ticket', checkInvalidApiKeyBan( 'ticket' ), detectAnomalies, validateApiKey, ticketProxy);
 // Protected company routes (API key required) - must come AFTER public routes to avoid conflicts
-app.use('/company', checkInvalidApiKeyBan( 'company' ), validateApiKey, companyProxy);
-app.use('/notify', checkInvalidApiKeyBan( 'notify' ), validateApiKey, notificationProxy);
+app.use('/company', checkInvalidApiKeyBan( 'company' ), detectAnomalies, validateApiKey, companyProxy);
+app.use('/notify', checkInvalidApiKeyBan( 'notify' ), detectAnomalies, validateApiKey, notificationProxy);
 
 app.listen(process.env.API_GATEWAY_PORT as unknown as number || 4000, () => (console.log(`API Gateway listening on ${process.env.API_GATEWAY_PORT as unknown as number || 4000}`)));

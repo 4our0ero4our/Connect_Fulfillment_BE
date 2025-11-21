@@ -179,6 +179,7 @@ export const createTicket = async (payload: TicketPayload) => {
  */
 export const attachTicketToOrder = async (orderId: string, ticketId: string) => {
   try {
+    const internalToken = process.env.INTERNAL_SERVICE_TOKEN;
     await axios.patch(
       `${ORDER_SERVICE_URL}/orders/${orderId}/ticket`,
       { ticketId },
@@ -187,14 +188,17 @@ export const attachTicketToOrder = async (orderId: string, ticketId: string) => 
         headers: {
           'Content-Type': 'application/json',
           'X-Internal-Service': 'ticket-service',
-          Authorization: process.env.INTERNAL_SERVICE_TOKEN
-            ? `Bearer ${process.env.INTERNAL_SERVICE_TOKEN}`
-            : undefined,
+          // Why are we using both X-Internal-Token and Authorization header?
+          // We should use both because the Authorization header is used for JWT token authentication.
+          'X-Internal-Token': internalToken || '',
+          ...(internalToken ? { Authorization: `Bearer ${internalToken}` } : {}),
         },
       }
     );
+    console.log(`✅ Successfully attached ticket ${ticketId} to order ${orderId}`);
   } catch (error) {
     console.error('Failed to attach ticket to order:', (error as any)?.message);
+    // Don't throw - ticket is created, attachment failure shouldn't break the flow
   }
 };
 

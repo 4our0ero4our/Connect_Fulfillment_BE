@@ -41,7 +41,8 @@ router.post('/send', requireInternalService, async (req: Request, res: Response)
   }
 });
 
-// This endpoint is used to send a notification to an admin
+
+// For CF Admins to manually trigger notifications
 router.post('/send-admin', requireCFAdmin, async (req: Request, res: Response) => {
   try {
     const { to, subject, text, html, attachments } = req.body || {};

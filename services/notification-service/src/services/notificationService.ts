@@ -354,3 +354,45 @@ export const handleCompanyAdminRemoved = async (event: any) => {
   });
 };
 
+export const handleOrderSoftDeleted = async (event: any) => {
+  if (!event?.customerInfo?.customerEmail && !event?.companyEmail) return;
+  
+  const rows = [
+    { label: 'Order Number', value: event.orderNumber || event.orderId || '—' },
+    { label: 'Merchant', value: event.companyName || '—' },
+    { label: 'Previous Status', value: sentenceCase(event.oldStatus || 'unknown') },
+    { label: 'Deleted At', value: formatDateTime(event.deletedAt || event.timestamp) },
+  ];
+
+  const html = `
+    <p>The order below has been marked as deleted. You can still view it in your order history with "deleted" status.</p>
+    ${buildDetailsTable(rows)}
+    <p style="margin-top:24px;">If you did not authorize this deletion, please contact support immediately.</p>
+  `;
+
+  if (event.customerInfo?.customerEmail) {
+    await dispatchNotification({
+      category: 'order-soft-deleted',
+      trigger: 'kafka:order_soft_deleted',
+      to: event.customerInfo.customerEmail,
+      subject: `Order ${event.orderNumber || event.orderId} has been deleted`,
+      preheader: 'Order marked as deleted',
+      intro: `Hi ${event.customerInfo.customerName || 'there'},`,
+      html,
+      meta: event,
+    });
+  }
+
+  if (event.companyEmail) {
+    await dispatchNotification({
+      category: 'order-soft-deleted-merchant',
+      trigger: 'kafka:order_soft_deleted',
+      to: event.companyEmail,
+      subject: `Order ${event.orderNumber || event.orderId} was marked as deleted`,
+      preheader: 'Order deleted',
+      html: `<p>An order from your company has been marked as deleted.</p>${buildDetailsTable(rows)}`,
+      meta: event,
+    });
+  }
+};
+

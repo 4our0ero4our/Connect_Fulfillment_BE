@@ -9,7 +9,6 @@ yarn-error.log*
 .env.local
 .env.production
 .env.test
-.env.example
 
 # Build outputs
 dist/
@@ -68,3 +67,10 @@ Connect_Fulfillment_14day_Roadmap.md
 postman_collections.json
 PAGINATION_SORTING_EXPLANATION.md
 ORDER_ATTRIBUTION_EXPLANATION.md
+SMTP_CONFIGURATION_GUIDE.md
+TICKET_INTEGRATION_GUIDE.md
+IMPLEMENTATION_SUMMARY.md
+INTERVIEW_RESPONSE.md
+INTERVIEW_RESPONSE_CONCISE.md
+DASHBOARD_DEVELOPMENT_GUIDE.md
+FINAL_INTERVIEW_RESPONSE.txt
