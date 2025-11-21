@@ -75,11 +75,26 @@ const ensureConnected = async (forceReconnect: boolean = false): Promise<boolean
   }
 };
 
+/**
+ * Connects the Kafka producer to the Kafka broker.
+ * 
+ * Establishes connection to Kafka for publishing events. Should be called
+ * during service startup. Handles connection retries and error recovery.
+ * 
+ * @returns {Promise<boolean>} True if connection successful, false otherwise
+ */
 export const connectKafkaProducer = async () => {
   return await ensureConnected();
 };
 
-// Disconnect producer on service shutdown
+/**
+ * Disconnects the Kafka producer from the Kafka broker.
+ * 
+ * Gracefully closes the connection to Kafka. Should be called during
+ * service shutdown to ensure clean disconnection.
+ * 
+ * @returns {Promise<void>}
+ */
 export const disconnectKafkaProducer = async () => {
   try {
     if (isConnected) {
@@ -93,7 +108,19 @@ export const disconnectKafkaProducer = async () => {
   }
 };
 
-// Helper function to send message with reconnection logic
+/**
+ * Helper function to send Kafka message with automatic reconnection and retry logic.
+ * 
+ * Handles connection failures, disconnections, and network errors by automatically
+ * reconnecting and retrying up to 3 times with exponential backoff. Ensures reliable
+ * event publishing even when Kafka is temporarily unavailable.
+ * 
+ * @param {string} topic - Kafka topic name to publish to
+ * @param {Array<{key: string, value: string}>} messages - Array of messages to send
+ * @param {string} eventName - Event name for logging purposes
+ * @returns {Promise<void>} Resolves when message is sent successfully
+ * @throws {Error} If all retry attempts fail
+ */
 const sendWithRetry = async (
   topic: string,
   messages: Array<{ key: string; value: string }>,
@@ -165,7 +192,26 @@ const sendWithRetry = async (
   }
 };
 
-// Publish order_created event to Kafka
+/**
+ * Publishes an order_created event to Kafka.
+ * 
+ * Emits an event when a new order is created, containing all order details.
+ * This event is consumed by the Notification Service to send order confirmation
+ * emails to customers and merchants.
+ * 
+ * @param {Object} orderData - Order information including ID, number, company, customer, items, and totals
+ * @param {string} orderData.orderId - MongoDB ObjectId of the order
+ * @param {string} orderData.orderNumber - Unique order number
+ * @param {string} orderData.companyId - Company ID that owns the order
+ * @param {string} orderData.companyName - Company name
+ * @param {Object} orderData.customerInfo - Customer details (name, email, phone)
+ * @param {Array} orderData.items - Order items array
+ * @param {number} orderData.totalAmount - Total order amount
+ * @param {string} orderData.status - Order status
+ * @param {Date} orderData.createdAt - Order creation timestamp
+ * 
+ * @returns {Promise<void>} Resolves when event is published (does not throw on failure)
+ */
 export const publishOrderCreated = async (orderData: {
   orderId: string;
   orderNumber: string;
@@ -209,9 +255,27 @@ export const publishOrderCreated = async (orderData: {
   }
 };
 
-// Publish order_status_updated event to Kafka
-// This event is consumed by Ticket Service to generate tickets when status is "packed"
-// and by Notification Service to send status update emails
+/**
+ * Publishes an order_status_updated event to Kafka.
+ * 
+ * Emits an event when an order status changes. This event is consumed by:
+ * - Ticket Service: Generates QR tickets when status changes to "packed"
+ * - Notification Service: Sends status update emails to customers and merchants
+ * 
+ * @param {Object} orderData - Order information including status change details
+ * @param {string} orderData.orderId - MongoDB ObjectId of the order
+ * @param {string} orderData.orderNumber - Unique order number
+ * @param {string} orderData.companyId - Company ID that owns the order
+ * @param {string} orderData.companyName - Company name
+ * @param {string} [orderData.companyEmail] - Company email
+ * @param {Object} orderData.customerInfo - Customer details (name, email, phone, address)
+ * @param {Array} orderData.items - Order items array
+ * @param {string} orderData.status - New order status (pending, processing, packed, completed, cancelled)
+ * @param {string} [orderData.previousStatus] - Previous order status
+ * @param {Date} orderData.updatedAt - Status update timestamp
+ * 
+ * @returns {Promise<void>} Resolves when event is published (does not throw on failure)
+ */
 export const publishOrderStatusUpdated = async (orderData: {
   orderId: string;
   orderNumber: string;
@@ -259,7 +323,21 @@ export const publishOrderStatusUpdated = async (orderData: {
   }
 };
 
-// Publish order_deleted event to Kafka (hard delete - Lead CF Admin only)
+/**
+ * Publishes an order_deleted event to Kafka (hard delete).
+ * 
+ * Emits an event when an order is permanently deleted by a Lead CF Admin.
+ * This is different from order_soft_deleted - hard delete moves the order
+ * to the deleted_orders collection for analytics and cannot be undone.
+ * 
+ * @param {Object} orderData - Order deletion information
+ * @param {string} orderData.orderId - MongoDB ObjectId of the order
+ * @param {string} orderData.orderNumber - Unique order number
+ * @param {string} orderData.companyId - Company ID that owned the order
+ * @param {Date} orderData.deletedAt - Deletion timestamp
+ * 
+ * @returns {Promise<void>} Resolves when event is published (does not throw on failure)
+ */
 export const publishOrderDeleted = async (orderData: {
   orderId: string;
   orderNumber: string;
@@ -288,8 +366,28 @@ export const publishOrderDeleted = async (orderData: {
   }
 };
 
-// Publish order_soft_deleted event to Kafka (soft delete - merchant/admin marks as deleted)
-// This is different from order_deleted which is hard delete (Lead CF Admin only)
+/**
+ * Publishes an order_soft_deleted event to Kafka (soft delete).
+ * 
+ * Emits an event when an order is soft-deleted by a merchant or admin.
+ * Soft delete marks the order with status "deleted" but keeps it visible
+ * in the database. This is different from order_deleted (hard delete by Lead CF Admin).
+ * The Notification Service consumes this event to notify customers and merchants.
+ * 
+ * @param {Object} orderData - Order soft deletion information
+ * @param {string} orderData.orderId - MongoDB ObjectId of the order
+ * @param {string} orderData.orderNumber - Unique order number
+ * @param {string} orderData.companyId - Company ID that owns the order
+ * @param {string} orderData.companyName - Company name
+ * @param {string} orderData.oldStatus - Previous order status before deletion
+ * @param {Date} orderData.deletedAt - Soft deletion timestamp
+ * @param {Object} [orderData.deletedBy] - Information about who deleted the order
+ * @param {string} orderData.deletedBy.type - Type of deleter (merchant, company_admin, cf_admin)
+ * @param {string} [orderData.deletedBy.email] - Email of the deleter
+ * @param {string} [orderData.deletedBy.id] - ID of the deleter
+ * 
+ * @returns {Promise<void>} Resolves when event is published (does not throw on failure)
+ */
 export const publishOrderSoftDeleted = async (orderData: {
   orderId: string;
   orderNumber: string;
@@ -332,10 +430,34 @@ export const publishOrderSoftDeleted = async (orderData: {
   }
 };
 
-// Publish ticket_attached_to_order event to Kafka
-// This event is published when Ticket Service attaches a ticketId to an order
-// Notification Service consumes this to send ticket/QR code emails to customers
-// If isReplacement is true, Notification Service will send a different email indicating ticket was updated
+/**
+ * Publishes a ticket_attached_to_order event to Kafka.
+ * 
+ * Emits an event when a ticket is attached to an order. This happens when:
+ * - Ticket Service automatically generates and attaches a ticket (isReplacement=false)
+ * - CF Admin replaces an existing ticket (isReplacement=true)
+ * 
+ * The Notification Service consumes this event to send QR code emails to customers.
+ * If isReplacement is true, a different email template is used to notify of ticket update.
+ * 
+ * @param {Object} orderData - Ticket attachment information
+ * @param {string} orderData.orderId - MongoDB ObjectId of the order
+ * @param {string} orderData.orderNumber - Unique order number
+ * @param {string} orderData.companyId - Company ID that owns the order
+ * @param {string} orderData.companyName - Company name
+ * @param {string} orderData.ticketId - Ticket ID being attached
+ * @param {string} [orderData.oldTicketId] - Previous ticket ID (if replacement)
+ * @param {boolean} [orderData.isReplacement] - Whether this is a ticket replacement
+ * @param {Object} [orderData.replacedBy] - Admin who replaced the ticket (if replacement)
+ * @param {Object} orderData.customerInfo - Customer details (name, email, phone)
+ * @param {Array} orderData.items - Order items array
+ * @param {number} orderData.totalAmount - Total order amount
+ * @param {string} orderData.currency - Currency code
+ * @param {string} orderData.status - Current order status
+ * @param {Date} orderData.attachedAt - Ticket attachment timestamp
+ * 
+ * @returns {Promise<void>} Resolves when event is published (does not throw on failure)
+ */
 export const publishTicketAttached = async (orderData: {
   orderId: string;
   orderNumber: string;

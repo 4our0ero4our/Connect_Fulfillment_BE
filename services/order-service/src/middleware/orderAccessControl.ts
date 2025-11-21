@@ -48,7 +48,19 @@ const Admin = adminDBConnection.models.Admin || adminDBConnection.model<IAdmin>(
 
 const getStaffsCollection = () => adminDBConnection.collection('staffs');
 
-// Middleware to verify internal service requests (for ticket service auto-attachment)
+/**
+ * Middleware to verify internal service requests.
+ * 
+ * Validates that the request is coming from an internal microservice (e.g., ticket-service)
+ * by checking for the INTERNAL_SERVICE_TOKEN. Used for secure inter-service communication,
+ * such as when the ticket service automatically attaches tickets to orders.
+ * 
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ * @param {NextFunction} next - Express next middleware function
+ * 
+ * @returns {void} Calls next() if token is valid, otherwise returns 401 Unauthorized
+ */
 export const verifyInternalService = (req: Request, res: Response, next: NextFunction) => {
   const expectedToken = process.env.INTERNAL_SERVICE_TOKEN;
   if (!expectedToken) {
@@ -75,6 +87,16 @@ export const verifyInternalService = (req: Request, res: Response, next: NextFun
   });
 };
 
+/**
+ * Validates if a staff member is a lead Connect Fulfillment admin.
+ * 
+ * Checks the staffs collection in AdminDB to verify if the email belongs to
+ * a staff member with isALeadCFAdmin=true. Lead admins have elevated permissions
+ * for critical operations like hard-deleting orders.
+ * 
+ * @param {string} email - The email address to check
+ * @returns {Promise<boolean>} True if the email belongs to a lead CF admin, false otherwise
+ */
 const isValidLeadCFAdmin = async (email: string): Promise<boolean> => {
   try {
     const normalizedEmail = email.toLowerCase();
@@ -100,6 +122,20 @@ const isValidLeadCFAdmin = async (email: string): Promise<boolean> => {
 
 const COMPANY_SERVICE_URL = process.env.COMPANY_SERVICE_URL || 'http://company-service:4004';
 
+/**
+ * Resolves company information from request context.
+ * 
+ * Attempts to extract company details from multiple sources:
+ * 1. res.locals.company (set by API Gateway)
+ * 2. X-Company-ID, X-Company-API-Key headers (internal service communication)
+ * 3. your_company_api_key header (validates via company-service)
+ * 
+ * Used by middleware to determine which company a request belongs to.
+ * 
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ * @returns {Promise<Object|null>} Company object with _id, companyApiKey, companyName, or null if not found
+ */
 const resolveCompanyFromContext = async (req: Request, res: Response): Promise<any | null> => {
   let company = res.locals.company as any;
 
@@ -146,7 +182,20 @@ const resolveCompanyFromContext = async (req: Request, res: Response): Promise<a
   return null;
 };
 
-// Middleware to verify if requester is a Connect Fulfillment admin
+/**
+ * Middleware to verify if requester is a Connect Fulfillment admin.
+ * 
+ * Validates JWT token and checks that the admin exists in the Admin collection.
+ * Sets res.locals with admin information (isAdmin, adminId, adminEmail, adminName)
+ * for use in subsequent route handlers. Can use admin info already set by API Gateway
+ * or verify token directly.
+ * 
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ * @param {NextFunction} next - Express next middleware function
+ * 
+ * @returns {void} Calls next() if admin is valid, otherwise returns 401/403 error
+ */
 export const verifyCFAdmin = async (req: Request, res: Response, next: NextFunction) => {
   try {
     // Check if admin info is already set by API Gateway
@@ -198,8 +247,19 @@ export const verifyCFAdmin = async (req: Request, res: Response, next: NextFunct
   }
 };
 
-// Middleware to verify if requester is a merchant (has valid API key)
-// This middleware checks if company info is in res.locals (set by API Gateway)
+/**
+ * Middleware to verify if requester is a merchant (has valid API key).
+ * 
+ * Validates that the request includes a valid company API key and resolves
+ * company information. Sets res.locals with merchant information (isMerchant,
+ * companyId, companyApiKey, companyName) for use in subsequent route handlers.
+ * 
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ * @param {NextFunction} next - Express next middleware function
+ * 
+ * @returns {void} Calls next() if merchant is valid, otherwise returns 403 Forbidden
+ */
 export const verifyMerchant = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const company = await resolveCompanyFromContext(req, res);
@@ -226,8 +286,22 @@ export const verifyMerchant = async (req: Request, res: Response, next: NextFunc
   }
 };
 
-// Middleware that allows either admin OR merchant/company admin
-// CF Admin can access all orders, merchant/company admin can only access their own company's orders
+/**
+ * Middleware that allows either CF Admin OR merchant/company admin.
+ * 
+ * Flexible authentication middleware that accepts either:
+ * - CF Admin JWT token (can access all orders)
+ * - Company Admin JWT token (can only access their company's orders)
+ * - Company API key (merchant access, can only access their company's orders)
+ * 
+ * Sets appropriate res.locals flags based on the authentication method used.
+ * 
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ * @param {NextFunction} next - Express next middleware function
+ * 
+ * @returns {void} Calls next() if authentication is valid, otherwise returns 401/403 error
+ */
 export const verifyAdminOrMerchant = async (req: Request, res: Response, next: NextFunction) => {
   // Check if admin info is already set by API Gateway
   if (res.locals.isAdmin && res.locals.adminEmail) {
@@ -356,6 +430,22 @@ export const verifyAdminOrMerchant = async (req: Request, res: Response, next: N
 
 // Middleware to check if requester has access to a specific order
 // Admin can access any order, merchant can only access their own orders
+/**
+ * Middleware to verify order access based on requester's role.
+ * 
+ * Ensures that:
+ * - CF Admins can access any order
+ * - Company Admins/Merchants can only access orders belonging to their company
+ * 
+ * Must be used after verifyAdminOrMerchant middleware. Checks the order's
+ * companyId against the requester's companyId to enforce access control.
+ * 
+ * @param {Request} req - Express request object (must have orderId in params)
+ * @param {Response} res - Express response object
+ * @param {NextFunction} next - Express next middleware function
+ * 
+ * @returns {void} Calls next() if access is granted, otherwise returns 403/404 error
+ */
 export const verifyOrderAccess = async (req: Request, res: Response, next: NextFunction) => {
   const orderId = req.params.orderId;
   const { Order } = await import('../models/Order');
@@ -405,6 +495,19 @@ export const verifyOrderAccess = async (req: Request, res: Response, next: NextF
 };
 
 // Middleware to verify if requester is a lead CF Admin
+/**
+ * Middleware to verify if requester is a Lead CF Admin.
+ * 
+ * Validates that the authenticated CF Admin has lead admin privileges (isALeadCFAdmin=true).
+ * Lead admins have elevated permissions for critical operations like hard-deleting orders.
+ * Must be used after verifyCFAdmin middleware.
+ * 
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object (must have adminEmail in res.locals)
+ * @param {NextFunction} next - Express next middleware function
+ * 
+ * @returns {void} Calls next() if user is a lead admin, otherwise returns 403 Forbidden
+ */
 export const verifyLeadCFAdmin = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const token = req.headers.authorization?.split(' ')[1]; // Bearer TOKEN

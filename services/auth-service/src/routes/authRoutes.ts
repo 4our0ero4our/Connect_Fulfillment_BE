@@ -18,46 +18,100 @@ dotenv.config({ path: '.env' });
 dotenv.config({ path: './.env' });
 dotenv.config(); // Also try default .env in root
 
-// Validates company email by checking if the email is in the staffs collection in the database.
+/**
+ * Validates if an email belongs to a Connect Fulfillment staff member.
+ * Checks the staffs collection in the database to verify the email exists.
+ * 
+ * @param {string} email - The email address to validate
+ * @returns {Promise<boolean>} True if the email exists in the staffs collection, false otherwise
+ */
 const isValidCFStaffEmail = async (email: string): Promise<boolean> => {
   const staffsCollection = mongoose.connection.collection('staffs');
   const staff = await staffsCollection.findOne({ email: email });
   return staff ? true : false;
 };
 
-// Validates if the staff can be a Connect Fulfillment admin
+/**
+ * Validates if a staff member is authorized to become a Connect Fulfillment admin.
+ * Checks if the staff has the `canBeCFAdmin` flag set to true.
+ * 
+ * @param {string} email - The staff email to check
+ * @returns {Promise<boolean>} True if the staff can be a CF admin, false otherwise
+ */
 const isValidCFAdminStaff = async (email: string): Promise<boolean> => {
   const staffsCollection = mongoose.connection.collection('staffs');
   const staff = await staffsCollection.findOne({ email: email, canBeCFAdmin: true });
   return staff ? true : false;
 };
-// Validates email format
+
+/**
+ * Validates email format using standard email regex pattern.
+ * 
+ * @param {string} email - The email address to validate
+ * @returns {boolean} True if the email format is valid, false otherwise
+ */
 const isValidEmailFormat = (email: string): boolean => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
 };
 
-// Validates password strength
+/**
+ * Validates password strength requirements.
+ * Password must contain: at least 8 characters, one uppercase letter, one lowercase letter,
+ * one number, and one special character (@$!%*?&).
+ * 
+ * @param {string} password - The password to validate
+ * @returns {boolean} True if password meets strength requirements, false otherwise
+ */
 const isValidPassword = (password: string): boolean => {
   const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
   return passwordRegex.test(password);
 };
 
-// Validates if the staff is a lead Connect Fulfillment admin (helper function for route logic)
+/**
+ * Validates if a staff member is a lead Connect Fulfillment admin.
+ * Checks if the staff has the `isALeadCFAdmin` flag set to true.
+ * Lead admins have elevated permissions for critical operations.
+ * 
+ * @param {string} email - The staff email to check
+ * @returns {Promise<boolean>} True if the staff is a lead admin, false otherwise
+ */
 const isValidLeadCFAdmin = async (email: string): Promise<boolean> => {
   const staffsCollection = mongoose.connection.collection('staffs');
   const staff = await staffsCollection.findOne({ email: email, isALeadCFAdmin: true });
   return staff ? true : false;
 };
 
-// ✅ Working perfectly
-// Root endpoint (to confirm that Auth service is running)
+/**
+ * Health check endpoint for the Auth Service.
+ * Returns a simple status message to confirm the service is running.
+ * 
+ * @route GET /
+ * @returns {Object} Service status message
+ */
 router.get('/', (_req: Request, res: Response) => {
   res.json({ message: 'Auth Service is running', service: 'auth-service' });
 });
 
-// ✅ Working perfectly
-// Register endpoint (to register a new admin)
+/**
+ * Register a new Connect Fulfillment admin.
+ * 
+ * Validates that the email belongs to a CF staff member with admin privileges,
+ * creates a new admin account, and returns a JWT token for authentication.
+ * 
+ * @route POST /register
+ * @access Public (but email must be in staffs collection with canBeCFAdmin=true)
+ * @rateLimit 5 requests per 60 seconds
+ * 
+ * @param {string} req.body.adminName - Full name of the admin
+ * @param {string} req.body.adminEmail - Email address (must be CF staff email)
+ * @param {string} req.body.password - Password (must meet strength requirements)
+ * 
+ * @returns {Object} 201 - Admin created successfully with JWT token
+ * @returns {Object} 400 - Validation error (missing fields, invalid email/password format)
+ * @returns {Object} 409 - Admin already exists
+ * @returns {Object} 503 - Database connection error
+ */
 router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res: Response) => {
   const startTime = Date.now();
   console.log('🔄 Registration request received:', {
@@ -211,8 +265,23 @@ router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res:
   }
 });
 
-// ✅ Working perfectly
-// Login endpoint (to login an admin)
+/**
+ * Login endpoint for Connect Fulfillment admins.
+ * 
+ * Authenticates an admin using email and password, then returns a JWT token.
+ * The email must belong to a CF staff member with admin privileges.
+ * 
+ * @route POST /login
+ * @access Public (but email must be in staffs collection with canBeCFAdmin=true)
+ * @rateLimit 5 requests per 60 seconds
+ * 
+ * @param {string} req.body.adminEmail - Admin email address
+ * @param {string} req.body.password - Admin password
+ * 
+ * @returns {Object} 200 - Login successful with JWT token and admin details
+ * @returns {Object} 400 - Validation error (missing fields, invalid email format)
+ * @returns {Object} 401 - Invalid credentials (admin not found or incorrect password)
+ */
 router.post('/login', rateLimit(5, 60, 'login'), async (req: Request, res: Response) => {
   try {
     const { adminEmail, password } = req.body;
@@ -323,8 +392,17 @@ router.post('/login', rateLimit(5, 60, 'login'), async (req: Request, res: Respo
 //   }
 // };
 
-// ✅ Working perfectly
-// Logout endpoint (clients should delete their JWT on logout)
+/**
+ * Logout endpoint for Connect Fulfillment admins.
+ * 
+ * Clears all authentication cookies. Clients should also delete the JWT token
+ * from localStorage/sessionStorage on their end.
+ * 
+ * @route GET /logout
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @returns {Object} 200 - Logout successful message
+ */
 router.get('/logout', verifyCFAdminToken, (_req: Request, res: Response) => {
   // Removes the JWT from the client's browser
   res.clearCookie('token');
@@ -337,8 +415,17 @@ router.get('/logout', verifyCFAdminToken, (_req: Request, res: Response) => {
 });
 
 
-// ✅ Working perfectly
-// Protected route example to conform that verifyCFAdminToken Middleware works
+/**
+ * Get the profile of the currently authenticated Connect Fulfillment admin.
+ * 
+ * Returns admin details extracted from the JWT token, including permissions
+ * and role information for dashboard display.
+ * 
+ * @route GET /profile
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @returns {Object} 200 - Admin profile with id, name, email, role, permissions, and timestamps
+ */
 router.get('/profile', verifyCFAdminToken, (req: Request, res: Response) => {
   res.json({
     message: 'Admin profile',
@@ -356,8 +443,25 @@ router.get('/profile', verifyCFAdminToken, (req: Request, res: Response) => {
   });
 });
 
-// ✅ Working perfectly
-// Change password endpoint (to change an admin's password)
+/**
+ * Change password for a Connect Fulfillment admin.
+ * 
+ * Validates the current password, checks new password strength, and updates
+ * the admin's password in the database. The new password must be different
+ * from the current password.
+ * 
+ * @route POST /change-password
+ * @access Public (but requires valid current password)
+ * @rateLimit 5 requests per 60 seconds
+ * 
+ * @param {string} req.body.adminEmail - Admin email address
+ * @param {string} req.body.currentPassword - Current password for verification
+ * @param {string} req.body.newPassword - New password (must meet strength requirements)
+ * 
+ * @returns {Object} 200 - Password changed successfully
+ * @returns {Object} 400 - Validation error (missing fields, invalid format, same password)
+ * @returns {Object} 401 - Invalid credentials (admin not found or incorrect current password)
+ */
 router.post('/change-password', rateLimit(5, 60, 'change-password'), async (req: Request, res: Response): Promise<Response> => {
   try {
     const { adminEmail, currentPassword, newPassword } = req.body;
@@ -412,8 +516,26 @@ router.post('/change-password', rateLimit(5, 60, 'change-password'), async (req:
   }
 });
 
-// ✅ Working Perfectly
-// Add a new staff endpoint (to add a new staff)
+/**
+ * Add a new staff member to the Connect Fulfillment staff directory.
+ * 
+ * Creates a new staff record in the database. Only lead CF admins can add staff.
+ * Staff members can later be granted admin privileges via update-staff-admin-status.
+ * 
+ * @route POST /add-staff
+ * @access Private (requires Lead CF Admin JWT token)
+ * @rateLimit 5 requests per 60 seconds
+ * 
+ * @param {string} req.body.newStaffEmail - Staff email address (must be unique)
+ * @param {string} req.body.newStaffName - Full name of the staff member
+ * @param {string} req.body.newStaffRole - Role of the staff member
+ * @param {boolean} [req.body.canBeCFAdmin] - Whether staff can become a CF admin (optional)
+ * @param {boolean} [req.body.isALeadCFAdmin] - Whether staff is a lead admin (optional)
+ * 
+ * @returns {Object} 201 - Staff added successfully with staff details
+ * @returns {Object} 400 - Validation error (missing fields, invalid email format)
+ * @returns {Object} 409 - Staff email already exists
+ */
 router.post('/add-staff', rateLimit(5, 60, 'add-staff'), verifyCFAdminToken, verifyLeadCFAdmin, async (req: Request, res: Response) => {
   try {
     const { newStaffEmail, newStaffName, newStaffRole, canBeCFAdmin, isALeadCFAdmin } = req.body;
@@ -507,8 +629,23 @@ router.post('/add-staff', rateLimit(5, 60, 'add-staff'), verifyCFAdminToken, ver
   }
 });
 
-// ✅ Working Perfectly
-// Update a staff admin status endpoint (to update a staff admin status)
+/**
+ * Update whether a staff member can become a Connect Fulfillment admin.
+ * 
+ * Toggles the `canBeCFAdmin` flag for a staff member. Only lead CF admins can
+ * perform this action. This controls whether a staff member is allowed to
+ * register as a CF admin.
+ * 
+ * @route POST /update-staff-admin-status
+ * @access Private (requires Lead CF Admin JWT token)
+ * @rateLimit 5 requests per 60 seconds
+ * 
+ * @param {string} req.body.staffEmail - Staff email address to update
+ * @param {boolean} req.body.canBeCFAdmin - New admin eligibility status
+ * 
+ * @returns {Object} 200 - Staff admin status updated successfully
+ * @returns {Object} 400 - Validation error (missing fields, invalid email, staff not found)
+ */
 router.post('/update-staff-admin-status', rateLimit(5, 60, 'update-staff-admin-status'), verifyCFAdminToken, verifyLeadCFAdmin, async (req: Request, res: Response) => {
   try {
     const { staffEmail, canBeCFAdmin } = req.body;
@@ -562,8 +699,24 @@ router.post('/update-staff-admin-status', rateLimit(5, 60, 'update-staff-admin-s
   }
 });
 
-// ✅ Working Perfectly
-// Delete a staff endpoint (to delete a staff)
+/**
+ * Delete a staff member from the Connect Fulfillment staff directory.
+ * 
+ * Removes a staff member from the database. Lead admins cannot be deleted
+ * through this endpoint for security reasons. Only lead CF admins can
+ * perform this action.
+ * 
+ * @route DELETE /delete-staff
+ * @access Private (requires Lead CF Admin JWT token)
+ * @rateLimit 5 requests per 60 seconds
+ * 
+ * @param {string} req.body.staffEmail - Staff email address to delete
+ * 
+ * @returns {Object} 200 - Staff deleted successfully
+ * @returns {Object} 400 - Validation error (missing email, invalid format)
+ * @returns {Object} 403 - Cannot delete lead admin
+ * @returns {Object} 404 - Staff not found
+ */
 router.delete('/delete-staff', rateLimit(5, 60, 'delete-staff'), verifyCFAdminToken, verifyLeadCFAdmin, async (req: Request, res: Response) => {
   try {
     const { staffEmail } = req.body;
@@ -619,7 +772,19 @@ router.delete('/delete-staff', rateLimit(5, 60, 'delete-staff'), verifyCFAdminTo
   }
 });
 
-// Get all staffs endpoint (to get all staffs)
+/**
+ * Get all staff members in the Connect Fulfillment staff directory.
+ * 
+ * Returns a list of all staff members with their details including roles
+ * and admin permissions. Only lead CF admins can access this endpoint.
+ * 
+ * @route GET /get-all-staffs
+ * @access Private (requires Lead CF Admin JWT token)
+ * @rateLimit 5 requests per 60 seconds
+ * 
+ * @returns {Object} 200 - List of all staff members with their details
+ * @returns {Object} 404 - No staffs found
+ */
 router.get('/get-all-staffs', rateLimit(5, 60, 'get-all-staffs'), verifyCFAdminToken, verifyLeadCFAdmin, async (_req: Request, res: Response): Promise<Response> => {
   try {
     const staffs = await Staff.find();
@@ -646,8 +811,24 @@ router.get('/get-all-staffs', rateLimit(5, 60, 'get-all-staffs'), verifyCFAdminT
   }
 });
 
-// ✅ Working Perfectly
-// Remove admin endpoint (to remove an admin)
+/**
+ * Remove a Connect Fulfillment admin from the system.
+ * 
+ * Deletes an admin from the Admin collection and updates the corresponding
+ * staff record to set `canBeCFAdmin` to false. Admins cannot remove themselves.
+ * Only lead CF admins can perform this action.
+ * 
+ * @route DELETE /remove-admin
+ * @access Private (requires Lead CF Admin JWT token)
+ * @rateLimit 5 requests per 60 seconds
+ * 
+ * @param {string} req.body.targetAdminEmail - Email of the admin to remove
+ * 
+ * @returns {Object} 200 - Admin removed successfully, staff record updated
+ * @returns {Object} 400 - Validation error (missing email, invalid format)
+ * @returns {Object} 403 - Cannot remove yourself
+ * @returns {Object} 404 - Admin not found
+ */
 router.delete('/remove-admin', rateLimit(5, 60, 'remove-admin'), preserveRequestBody, verifyCFAdminToken, verifyLeadCFAdmin, async (req: Request, res: Response) => {
   try {
     // Get the adminEmail from the original request body (saved before middleware overwrote it)

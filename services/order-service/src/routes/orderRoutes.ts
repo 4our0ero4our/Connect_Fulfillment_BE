@@ -8,16 +8,37 @@ import { publishOrderCreated, publishOrderStatusUpdated, publishOrderDeleted, pu
 
 const router = Router();
 
-// ✅ Working perfectly
-// Health check endpoint
+/**
+ * Health check endpoint for the Order Service.
+ * Returns a simple status message to confirm the service is running.
+ * 
+ * @route GET /
+ * @returns {Object} Service status message
+ */
 router.get('/', (_req: Request, res: Response) => {
   res.status(200).json({ message: 'Order Service is running', service: 'order-service' });
 });
 
-// ✅ Working perfectly
-// Create a new order (Merchant only)
-// POST /order
-// Security: Company ID is extracted from API key validation (gateway middleware), NOT from request body
+/**
+ * Create a new order for a merchant company.
+ * 
+ * Creates an order with items and customer information. The company ID is
+ * automatically extracted from the API key validation (via gateway middleware),
+ * so it cannot be spoofed in the request body. Publishes an order_created
+ * event to Kafka for downstream processing.
+ * 
+ * @route POST /
+ * @access Private (requires Company API key in header)
+ * 
+ * @param {Array} req.body.items - Array of order items (productId, productName, quantity, price)
+ * @param {Object} req.body.customerInfo - Customer details (customerName, customerEmail, customerPhone, customerAddress)
+ * @param {string} [req.body.ticketId] - Optional ticket ID to attach
+ * @param {string} [req.body.notes] - Optional order notes
+ * @param {string} [req.body.currency] - Currency code (default: 'NGN')
+ * 
+ * @returns {Object} 201 - Order created successfully with order details
+ * @returns {Object} 400 - Validation error (missing fields, invalid data)
+ */
 router.post('/', verifyCompanyApiKey, verifyMerchant, async (req: Request, res: Response) => {
   try {
     // Reject any attempt to send companyId in body
@@ -170,10 +191,26 @@ router.post('/', verifyCompanyApiKey, verifyMerchant, async (req: Request, res: 
   }
 });
 
-// ✅ Working perfectly
-// Get all orders (CF Admin: all orders, Company Admin/Merchant: their own company's orders)
-// GET /orders
-// Authentication: CF Admin JWT token OR Company Admin JWT token OR Company API key
+/**
+ * Get all orders with pagination and filtering.
+ * 
+ * Returns orders based on the requester's role:
+ * - CF Admins: Can see all orders from all companies
+ * - Company Admins/Merchants: Can only see their own company's orders
+ * 
+ * Supports filtering by status and date range, with pagination.
+ * 
+ * @route GET /orders
+ * @access Private (requires CF Admin token OR Company Admin token OR Company API key)
+ * 
+ * @param {number} [req.query.page=1] - Page number for pagination
+ * @param {number} [req.query.limit=10] - Number of orders per page
+ * @param {string} [req.query.status] - Filter by order status (pending, processing, packed, completed, cancelled, deleted)
+ * @param {string} [req.query.startDate] - Filter orders created after this date (ISO format)
+ * @param {string} [req.query.endDate] - Filter orders created before this date (ISO format)
+ * 
+ * @returns {Object} 200 - Paginated list of orders with pagination metadata
+ */
 router.get('/orders', verifyAdminOrMerchant, async (req: Request, res: Response) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
@@ -253,10 +290,22 @@ router.get('/orders', verifyAdminOrMerchant, async (req: Request, res: Response)
   }
 });
 
-// ✅ Working perfectly
-// Get order by ID (CF Admin: any order, Company Admin/Merchant: their own company's orders only)
-// GET /orders/:orderId
-// Authentication: CF Admin JWT token OR Company Admin JWT token OR Company API key
+/**
+ * Get a specific order by ID.
+ * 
+ * Returns detailed information about a single order. Access control:
+ * - CF Admins: Can access any order
+ * - Company Admins/Merchants: Can only access their own company's orders
+ * 
+ * @route GET /orders/:orderId
+ * @access Private (requires CF Admin token OR Company Admin token OR Company API key)
+ * 
+ * @param {string} req.params.orderId - MongoDB ObjectId of the order
+ * 
+ * @returns {Object} 200 - Order details
+ * @returns {Object} 403 - Access denied (order belongs to different company)
+ * @returns {Object} 404 - Order not found
+ */
 router.get('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, async (req: Request, res: Response) => {
   try {
     const order = res.locals.order;
@@ -288,10 +337,24 @@ router.get('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, async (
   }
 });
 
-// ✅ Working perfectly
-// Update order status (CF Admin, Company Admin, or Merchant)
-// PATCH /orders/:orderId/status
-// Authentication: CF Admin JWT token OR Company Admin JWT token OR Company API key
+/**
+ * Update the status of an order.
+ * 
+ * Changes the order status through the lifecycle: pending → processing → packed → completed.
+ * When status changes to "packed", it triggers ticket generation via Kafka event.
+ * Cannot set status to "deleted" via this endpoint (use DELETE endpoint for that).
+ * 
+ * @route PATCH /orders/:orderId/status
+ * @access Private (requires CF Admin token OR Company Admin token OR Company API key)
+ * 
+ * @param {string} req.params.orderId - MongoDB ObjectId of the order
+ * @param {string} req.body.status - New status (pending, processing, packed, completed, cancelled)
+ * 
+ * @returns {Object} 200 - Order status updated successfully
+ * @returns {Object} 400 - Validation error (invalid status, status unchanged, cannot set to deleted)
+ * @returns {Object} 403 - Access denied
+ * @returns {Object} 404 - Order not found
+ */
 router.patch('/orders/:orderId/status', verifyAdminOrMerchant, verifyOrderAccess, async (req: Request, res: Response) => {
   try {
     const { status } = req.body;
@@ -382,11 +445,24 @@ router.patch('/orders/:orderId/status', verifyAdminOrMerchant, verifyOrderAccess
   }
 });
 
-// ✅ Working perfectly
-// Delete order (CF Admin, Company Admin, or Merchant - marks as deleted, doesn't actually get deleted from the database here. Only the status is updated to "deleted" and it's only a lead CF Admin that can actually delete the order from the database and it's another route for that.)
-// DELETE /orders/:orderId
-// Authentication: CF Admin JWT token OR Company Admin JWT token OR Company API key
-// Note: Orders are marked with status "deleted" instead of being removed from database
+/**
+ * Soft delete an order (mark as deleted).
+ * 
+ * Marks an order with status "deleted" instead of removing it from the database.
+ * The order remains visible but with deleted status. This is different from
+ * hard delete (DELETE /orders/:orderId/hard-delete) which permanently removes
+ * the order. Publishes order_soft_deleted event to Kafka.
+ * 
+ * @route DELETE /orders/:orderId
+ * @access Private (requires CF Admin token OR Company Admin token OR Company API key)
+ * 
+ * @param {string} req.params.orderId - MongoDB ObjectId of the order
+ * 
+ * @returns {Object} 200 - Order soft deleted successfully
+ * @returns {Object} 400 - Order already deleted
+ * @returns {Object} 403 - Access denied
+ * @returns {Object} 404 - Order not found
+ */
 router.delete('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, async (req: Request, res: Response) => {
   try {
     const orderId = req.params.orderId;
@@ -451,11 +527,24 @@ router.delete('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, asyn
   }
 });
 
-// ✅ Working perfectly
-// Attach ticket to order (Internal service endpoint for Ticket Service auto-attachment)
-// PATCH /orders/:orderId/ticket
-// This endpoint is called by Ticket Service after generating a ticket for an order with status="packed"
-// Only internal services (ticket-service) can use this endpoint - no CF Admin required
+/**
+ * Attach a ticket to an order (Internal service only).
+ * 
+ * This endpoint is used by the Ticket Service to automatically attach a ticket
+ * when an order status changes to "packed". Only internal services with the
+ * correct INTERNAL_SERVICE_TOKEN can use this endpoint. For CF Admin ticket
+ * replacement, use PATCH /orders/:orderId/ticket/replace instead.
+ * 
+ * @route PATCH /orders/:orderId/ticket
+ * @access Internal (requires INTERNAL_SERVICE_TOKEN)
+ * 
+ * @param {string} req.params.orderId - MongoDB ObjectId of the order
+ * @param {string} req.body.ticketId - Ticket ID to attach to the order
+ * 
+ * @returns {Object} 200 - Ticket attached successfully
+ * @returns {Object} 400 - Validation error (ticket already attached, order not in packed status)
+ * @returns {Object} 404 - Order not found
+ */
 router.patch('/orders/:orderId/ticket', verifyInternalService, async (req: Request, res: Response) => {
   try {
     const orderId = req.params.orderId;
@@ -551,11 +640,23 @@ router.patch('/orders/:orderId/ticket', verifyInternalService, async (req: Reque
   }
 });
 
-// ✅ Working perfectly
-// Replace ticket on order (CF Admin only - for rare edge cases)
-// PATCH /orders/:orderId/ticket/replace
-// This endpoint is called by CF Admins to replace a ticket in rare edge cases
-// Note: Tickets are one-time and cannot be replaced by merchants. Only CF Admins can replace tickets.
+/**
+ * Replace a ticket on an order (CF Admin only).
+ * 
+ * Allows CF Admins to replace an existing ticket in rare edge cases (e.g., ticket
+ * corruption, system errors). Merchants cannot replace tickets. Publishes
+ * ticket_attached_to_order event with isReplacement=true to notify the customer.
+ * 
+ * @route PATCH /orders/:orderId/ticket/replace
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @param {string} req.params.orderId - MongoDB ObjectId of the order
+ * @param {string} req.body.ticketId - New ticket ID to replace the existing one
+ * 
+ * @returns {Object} 200 - Ticket replaced successfully, customer will be notified
+ * @returns {Object} 400 - Validation error (no existing ticket, same ticket ID)
+ * @returns {Object} 404 - Order not found
+ */
 router.patch('/orders/:orderId/ticket/replace', verifyCFAdmin, async (req: Request, res: Response) => {
   try {
     const orderId = req.params.orderId;
@@ -652,9 +753,23 @@ router.patch('/orders/:orderId/ticket/replace', verifyCFAdmin, async (req: Reque
   }
 });
 
-// ✅ Working perfectly
-// Get all orders for a specific company (Admin only)
-// GET /orders/company/:companyId
+/**
+ * Get all orders for a specific company (CF Admin only).
+ * 
+ * Returns paginated list of orders for a given company. Only CF Admins can
+ * access this endpoint to view orders across different companies.
+ * 
+ * @route GET /orders/company/:companyId
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @param {string} req.params.companyId - MongoDB ObjectId of the company
+ * @param {number} [req.query.page=1] - Page number for pagination
+ * @param {number} [req.query.limit=10] - Number of orders per page
+ * @param {string} [req.query.status] - Filter by order status
+ * 
+ * @returns {Object} 200 - Paginated list of company orders
+ * @returns {Object} 404 - Company not found
+ */
 router.get('/orders/company/:companyId', verifyCFAdmin, async (req: Request, res: Response) => {
   try {
     const companyId = req.params.companyId;
@@ -717,11 +832,24 @@ router.get('/orders/company/:companyId', verifyCFAdmin, async (req: Request, res
   }
 });
 
-// ✅ Working perfectly
-// Get orders for a customer by email (Public route - no auth required, just email verification)
-// POST /orders/customer
-// Body: customerEmail (required), companyId (optional)
-// If companyId is "all" or not provided, return all orders for the customer from all merchants
+/**
+ * Get orders for a customer by email (Public route).
+ * 
+ * Allows customers to retrieve their order history by providing their email.
+ * No authentication required, but email format is validated. Can filter by
+ * specific company or return all orders from all merchants.
+ * 
+ * @route POST /orders/customer
+ * @access Public (no authentication required)
+ * 
+ * @param {string} req.body.customerEmail - Customer email address (required)
+ * @param {string} [req.body.companyId] - Company ID to filter by, or "all" for all companies
+ * @param {number} [req.query.page=1] - Page number for pagination
+ * @param {number} [req.query.limit=50] - Number of orders per page (default: 50)
+ * 
+ * @returns {Object} 200 - Paginated list of customer orders
+ * @returns {Object} 400 - Validation error (missing email, invalid email format)
+ */
 router.post('/orders/customer', async (req: Request, res: Response) => {
   try {
     const { customerEmail, companyId } = req.body;
@@ -815,8 +943,23 @@ router.post('/orders/customer', async (req: Request, res: Response) => {
 import { DeletedOrder } from '../models/DeletedOrder';
 import { verifyLeadCFAdmin } from '../middleware/orderAccessControl';
 
-// Hard delete order (Lead CF Admin only) - moves document to deleted_orders collection and removes from orders
-// DELETE /orders/:orderId/hard-delete
+/**
+ * Hard delete an order (Lead CF Admin only).
+ * 
+ * Permanently removes an order from the orders collection and moves it to
+ * the deleted_orders collection for analytics purposes. This is irreversible.
+ * Only Lead CF Admins can perform this action. Publishes order_deleted event
+ * to Kafka.
+ * 
+ * @route DELETE /orders/:orderId/hard-delete
+ * @access Private (requires Lead CF Admin JWT token)
+ * 
+ * @param {string} req.params.orderId - MongoDB ObjectId of the order
+ * 
+ * @returns {Object} 200 - Order hard deleted successfully
+ * @returns {Object} 403 - Access denied (not a Lead CF Admin)
+ * @returns {Object} 404 - Order not found
+ */
 router.delete('/orders/:orderId/hard-delete', verifyLeadCFAdmin, async (req: Request, res: Response) => {
 	try {
 		const orderId = req.params.orderId;

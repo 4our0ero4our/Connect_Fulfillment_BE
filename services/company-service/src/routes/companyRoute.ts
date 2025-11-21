@@ -24,6 +24,14 @@ try {
   bcrypt = require('bcryptjs');
 } catch { }
 
+/**
+ * Verifies a plain text password against a hashed value.
+ * Supports both bcrypt and scrypt hashing algorithms for backward compatibility.
+ * 
+ * @param {string} plainText - The plain text password to verify
+ * @param {string} hashedValue - The hashed password (bcrypt or scrypt format)
+ * @returns {Promise<boolean>} True if password matches, false otherwise
+ */
 const verifyPassword = async (plainText: string, hashedValue: string): Promise<boolean> => {
   if (bcrypt && typeof bcrypt.compare === 'function') {
     return bcrypt.compare(plainText, hashedValue);
@@ -45,25 +53,81 @@ const verifyPassword = async (plainText: string, hashedValue: string): Promise<b
 const router = Router();
 const COMPANY_PORTAL_URL = (process.env.COMPANY_PORTAL_URL || 'https://portal.connectfulfillment.com').replace(/\/$/, '');
 
+/**
+ * Generates a secure random onboarding token for company API key retrieval.
+ * Token is 48 bytes (96 hex characters) for high entropy.
+ * 
+ * @returns {string} Random hexadecimal token
+ */
 const generateOnboardingToken = () => crypto.randomBytes(48).toString('hex');
+
+/**
+ * Hashes an onboarding token using SHA-256 for secure storage.
+ * The hashed value is stored in the database, not the plain token.
+ * 
+ * @param {string} token - The plain onboarding token to hash
+ * @returns {string} SHA-256 hash of the token
+ */
 const hashToken = (token: string) => crypto.createHash('sha256').update(token).digest('hex');
+
+/**
+ * Masks an API key for display purposes, showing only first and last few characters.
+ * Used in emails and UI to prevent full API key exposure.
+ * 
+ * @param {string|null|undefined} apiKey - The API key to mask
+ * @returns {string} Masked API key (e.g., "CFK_abcd••••wxyz")
+ */
 const maskApiKey = (apiKey?: string | null) => {
   if (!apiKey) return '***';
   if (apiKey.length <= 8) return `${apiKey.slice(0, 2)}••${apiKey.slice(-2)}`;
   return `${apiKey.slice(0, 4)}••••${apiKey.slice(-4)}`;
 };
 
+/**
+ * Builds the onboarding link URL for company API key retrieval.
+ * Combines the company portal URL with the onboarding token.
+ * 
+ * @param {string} token - The onboarding token
+ * @returns {string} Full onboarding URL with token parameter
+ */
 const buildOnboardingLink = (token: string) => `${COMPANY_PORTAL_URL}/setup?token=${token}`;
 
-// ✅ Working perfectly 
-// Health check endpoint
+/**
+ * Health check endpoint for the Company Service.
+ * Returns a simple status message to confirm the service is running.
+ * 
+ * @route GET /
+ * @returns {Object} Service status message
+ */
 router.get('/', (_req: Request, res: Response) => {
   res.status(200).json({ message: 'Company Service is running', service: 'company-service' });
 });
 
-// ✅ Working perfectly
-// Register company endpoint (to register a new company)
-// The required API key to register a company will be that of the Connect Fulfillment company.
+/**
+ * Register a new merchant company.
+ * 
+ * Creates a new company record with all required information. The company
+ * is created with isVerified=false and must be verified by a CF Admin before
+ * they can use the API. An API key is automatically generated and assigned.
+ * 
+ * @route POST /register
+ * @access Public (no authentication required)
+ * 
+ * @param {string} req.body.companyName - Company name
+ * @param {string} req.body.companyEmail - Company email (must be unique)
+ * @param {string} req.body.companyAddress - Company physical address
+ * @param {number} req.body.companyPhone - Company phone number (10 digits, must be unique)
+ * @param {string} req.body.companyWebsite - Company website URL
+ * @param {string} req.body.companyLogo - Company logo URL (image URL)
+ * @param {string} req.body.companyDescription - Company description (10-1000 chars)
+ * @param {string} req.body.companyDetails - Detailed company information (100-1000 chars)
+ * @param {string} req.body.companyCategory - Company category (Electronics, Clothing, Furniture, Other)
+ * @param {string} req.body.companySubCategory - Company sub-category
+ * 
+ * @returns {Object} 201 - Company registered successfully (API key not included in response)
+ * @returns {Object} 400 - Validation error (missing fields, invalid format)
+ * @returns {Object} 409 - Company email or phone already exists
+ */
 router.post('/register', async (req: Request, res: Response) => {
   try {
     if (!req.body.companyName || !req.body.companyEmail || !req.body.companyAddress || !req.body.companyPhone || !req.body.companyWebsite || !req.body.companyLogo || !req.body.companyDescription || !req.body.companyDetails || !req.body.companyCategory || !req.body.companySubCategory) {
@@ -124,8 +188,26 @@ router.post('/register', async (req: Request, res: Response) => {
   }
 })
 
-// ✅ Working perfectly
-// Company Admin Registration endpoint (to register a company admin)
+/**
+ * Register a company admin for a merchant company.
+ * 
+ * Creates a company admin account linked to a specific company. The admin
+ * email must first be added to the company's admin emails list by a CF Admin.
+ * The company must be verified before admins can register.
+ * 
+ * @route POST /company-admin/register
+ * @access Public (but requires company API key in header)
+ * 
+ * @param {string} req.headers.your_company_api_key - Company API key (required)
+ * @param {string} req.body.companyAdminName - Full name of the company admin
+ * @param {string} req.body.companyAdminEmail - Email address (must be in company's admin emails list)
+ * @param {string} req.body.companyAdminPassword - Password for the admin account
+ * 
+ * @returns {Object} 201 - Company admin registered successfully
+ * @returns {Object} 400 - Validation error (missing fields)
+ * @returns {Object} 401 - Company not found or not verified
+ * @returns {Object} 409 - Admin email not linked to company or admin already exists
+ */
 router.post('/company-admin/register', async (req: Request, res: Response) => {
   try {
     if (!req.body.companyAdminName || !req.body.companyAdminEmail || !req.body.companyAdminPassword) {
@@ -178,8 +260,24 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
   }
 });
 
-// ✅ Working perfectly
-// Company Admin Login endpoint (to login a company admin)
+/**
+ * Login endpoint for company admins.
+ * 
+ * Authenticates a company admin using email, password, and company API key.
+ * Returns a JWT token that includes company information for authorization.
+ * The company must be verified and active for login to succeed.
+ * 
+ * @route POST /company-admin/login
+ * @access Public (but requires company API key in header)
+ * 
+ * @param {string} req.headers.your_company_api_key - Company API key (required)
+ * @param {string} req.body.companyAdminEmail - Company admin email
+ * @param {string} req.body.companyAdminPassword - Company admin password
+ * 
+ * @returns {Object} 200 - Login successful with JWT token and admin details
+ * @returns {Object} 400 - Validation error (missing fields)
+ * @returns {Object} 401 - Invalid credentials (company not found, not verified, or incorrect password)
+ */
 router.post('/company-admin/login', async (req: Request, res: Response) => {
   const companyApiKey = req.headers['your_company_api_key'] as string;
   const startTime = Date.now();
@@ -279,19 +377,37 @@ router.post('/company-admin/login', async (req: Request, res: Response) => {
   }
 })
 
-// ✅ Working perfectly
-// Get all companies endpoint (to get all companies - Only Connect Fulfillment Admins can access this route)
+/**
+ * Get all registered companies (CF Admin only).
+ * 
+ * Returns a list of all company names in the system. Only CF Admins can
+ * access this endpoint. For full company details, use other admin endpoints.
+ * 
+ * @route GET /companies
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @returns {Object} 200 - List of all company names
+ */
 router.get('/companies', verifyCFAdminToken, async (_req: Request, res: Response) => {
   // if (!req.body.company) return res.status(401).json({ message: 'Unauthorized' });
   const companyNames = await Company.find({}, 'companyName');
   res.status(200).json({ companyNames });
 });
 
-// ✅ Working perfectly
-// Get companies with deletion settings enabled (Internal service endpoint for order deletion scheduler)
-// GET /companies-with-deletion-settings
-// This endpoint returns companies that have order deletion settings enabled
-// Used by order-service scheduler to determine which companies' orders to auto-delete
+/**
+ * Get companies with order deletion settings enabled (Internal service endpoint).
+ * 
+ * Returns a list of companies that have configured automatic order deletion.
+ * Used by the order-service scheduler to determine which companies' orders
+ * should be auto-deleted based on their retention settings. Only returns
+ * verified and active companies.
+ * 
+ * @route GET /companies-with-deletion-settings
+ * @access Internal (requires INTERNAL_SERVICE_TOKEN, optional for backward compatibility)
+ * 
+ * @returns {Object} 200 - List of companies with deletion settings and their configuration
+ * @returns {Object} 401 - Unauthorized (invalid internal service token)
+ */
 router.get('/companies-with-deletion-settings', async (req: Request, res: Response) => {
   try {
     // Verify internal service token if provided (optional for backward compatibility)
@@ -333,8 +449,20 @@ router.get('/companies-with-deletion-settings', async (req: Request, res: Respon
   }
 });
 
-// ✅ Working perfectly
-// verifies company admin token
+/**
+ * Verify a company admin JWT token.
+ * 
+ * Validates a company admin token and returns the admin information if valid.
+ * Useful for frontend token validation and session checks.
+ * 
+ * @route GET /company-admin/verify-token
+ * @access Public (but requires valid JWT token)
+ * 
+ * @param {string} req.headers.authorization - Bearer token (JWT)
+ * 
+ * @returns {Object} 200 - Token verified with admin details
+ * @returns {Object} 401 - Invalid or expired token
+ */
 router.get('/company-admin/verify-token', async (req: Request, res: Response) => {
   try {
     const token = req.headers['authorization']?.split(' ')[1];
@@ -348,8 +476,21 @@ router.get('/company-admin/verify-token', async (req: Request, res: Response) =>
   }
 });
 
-// ✅ Working perfectly
-// Verifies if API key is valid or not
+/**
+ * Verify if a company API key is valid.
+ * 
+ * Used by the API Gateway to validate API keys on each request. Returns
+ * company information if the key is valid and the company is verified/active.
+ * This is a critical security endpoint for API access control.
+ * 
+ * @route GET /verify-key
+ * @access Public (but requires API key in header)
+ * 
+ * @param {string} req.headers.your_company_api_key - Company API key to verify
+ * 
+ * @returns {Object} 200 - API key validation result with company details if valid
+ * @returns {Object} 200 - API key validation result with valid: false if invalid
+ */
 router.get('/verify-key', async (req: Request, res: Response) => {
   const apiKey = req.headers['your_company_api_key'] as string;
   if (!apiKey) return res.json({ valid: false, error: 'API key validation failed: Company API key is required' });
@@ -360,9 +501,24 @@ router.get('/verify-key', async (req: Request, res: Response) => {
   res.json({ valid: true, company: companyExist });
 });
 
-// ✅ Working perfectly
-// Add admin email to company admin emails
-// Only Connect Fulfillment admins can add admin emails to companies
+/**
+ * Add an admin email to a company's admin emails list.
+ * 
+ * Adds an email address to the company's authorized admin emails. This email
+ * can then be used to register as a company admin. Only CF Admins can perform
+ * this action to maintain control over company admin access.
+ * 
+ * @route POST /add-admin-email-to-company
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @param {string} req.headers.company_to_add_admin_email_to - Company API key
+ * @param {string} req.body.newAdminEmail - Email address to add to company admin emails
+ * 
+ * @returns {Object} 200 - Admin email added successfully
+ * @returns {Object} 400 - Validation error (missing fields, invalid email format)
+ * @returns {Object} 404 - Company not found
+ * @returns {Object} 409 - Admin email already exists in company
+ */
 router.post('/add-admin-email-to-company', verifyCFAdminToken, async (req: Request, res: Response) => {
   try {
     const { newAdminEmail } = req.body;
@@ -457,7 +613,25 @@ router.post('/add-admin-email-to-company', verifyCFAdminToken, async (req: Reque
   }
 });
 
-// ✅ Verify or unverify company + issue onboarding token/link
+/**
+ * Verify or unverify a company and manage onboarding tokens.
+ * 
+ * Allows CF Admins to verify companies (enabling API access) or unverify them.
+ * When verifying, generates a one-time onboarding token and link for secure
+ * API key retrieval. The token expires in 24 hours and can only be used once.
+ * Publishes company_verified event to Kafka when verification is enabled.
+ * 
+ * @route PATCH /company/:companyId/verify
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @param {string} req.params.companyId - MongoDB ObjectId of the company
+ * @param {boolean} req.body.isVerified - Whether to verify (true) or unverify (false) the company
+ * @param {boolean} [req.body.regenerateToken] - Whether to regenerate onboarding token even if already verified
+ * 
+ * @returns {Object} 200 - Company verification status updated with onboarding link if verified
+ * @returns {Object} 400 - Validation error (isVerified must be boolean)
+ * @returns {Object} 404 - Company not found
+ */
 router.patch('/company/:companyId/verify', verifyCFAdminToken, async (req: Request, res: Response) => {
   try {
     const { isVerified, regenerateToken } = req.body;
@@ -518,7 +692,23 @@ router.patch('/company/:companyId/verify', verifyCFAdminToken, async (req: Reque
   }
 });
 
-// ✅ Toggle API key status (active/inactive)
+/**
+ * Toggle API key status (active/inactive) for a company.
+ * 
+ * Allows CF Admins to temporarily disable a company's API key without
+ * unverifying the company. When status changes, publishes company_api_key_status_changed
+ * event to Kafka to notify the company.
+ * 
+ * @route PATCH /company/:companyId/api-key/status
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @param {string} req.params.companyId - MongoDB ObjectId of the company
+ * @param {boolean} req.body.active - Whether to activate (true) or deactivate (false) the API key
+ * 
+ * @returns {Object} 200 - API key status updated successfully
+ * @returns {Object} 400 - Validation error (active must be boolean)
+ * @returns {Object} 404 - Company not found
+ */
 router.patch('/company/:companyId/api-key/status', verifyCFAdminToken, async (req: Request, res: Response) => {
   try {
     const { active } = req.body;
@@ -557,7 +747,24 @@ router.patch('/company/:companyId/api-key/status', verifyCFAdminToken, async (re
   }
 });
 
-// ✅ Activate/Deactivate merchant (company) account
+/**
+ * Activate or deactivate a merchant company account.
+ * 
+ * Allows CF Admins to suspend or reactivate a company's account. When status
+ * changes, publishes company_status_changed event to Kafka to notify the company.
+ * Deactivated companies cannot use the API even if verified.
+ * 
+ * @route PATCH /company/:companyId/status
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @param {string} req.params.companyId - MongoDB ObjectId of the company
+ * @param {boolean} req.body.isActive - Whether to activate (true) or deactivate (false) the account
+ * @param {string} [req.body.reason] - Optional reason for status change
+ * 
+ * @returns {Object} 200 - Company status updated successfully
+ * @returns {Object} 400 - Validation error (isActive must be boolean)
+ * @returns {Object} 404 - Company not found
+ */
 router.patch('/company/:companyId/status', verifyCFAdminToken, async (req: Request, res: Response) => {
   try {
     const { isActive, reason } = req.body;
@@ -597,7 +804,23 @@ router.patch('/company/:companyId/status', verifyCFAdminToken, async (req: Reque
   }
 });
 
-// ✅ Remove merchant admin
+/**
+ * Remove a company admin from a merchant company.
+ * 
+ * Removes a company admin from both the companyAdminIDDetails array and the
+ * companyAdminEmails array. Publishes company_admin_removed event to Kafka
+ * to notify the removed admin. Only CF Admins can perform this action.
+ * 
+ * @route DELETE /company/company-admin
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @param {string} req.body.companyId - MongoDB ObjectId of the company
+ * @param {string} req.body.companyAdminEmail - Email of the admin to remove
+ * 
+ * @returns {Object} 200 - Company admin removed successfully
+ * @returns {Object} 400 - Validation error (missing fields)
+ * @returns {Object} 404 - Company or admin not found
+ */
 router.delete('/company/company-admin', verifyCFAdminToken, async (req: Request, res: Response) => {
   try {
     const { companyId, companyAdminEmail } = req.body;
@@ -646,7 +869,24 @@ router.delete('/company/company-admin', verifyCFAdminToken, async (req: Request,
   }
 });
 
-// ✅ Redeem onboarding token to fetch API key (one-time)
+/**
+ * Redeem onboarding token to retrieve company API key (one-time use).
+ * 
+ * Allows companies to securely retrieve their API key using the onboarding
+ * token sent via email after verification. The token can only be used once
+ * and expires after 24 hours. After redemption, the token is invalidated.
+ * 
+ * @route GET /company/onboarding/:token
+ * @access Public (but requires valid onboarding token)
+ * 
+ * @param {string} req.params.token - The onboarding token from the verification email
+ * 
+ * @returns {Object} 200 - API key retrieved successfully (only time it's shown in plain text)
+ * @returns {Object} 400 - Token is required
+ * @returns {Object} 404 - Invalid token
+ * @returns {Object} 410 - Token expired or already used
+ * @returns {Object} 409 - Company API key not found
+ */
 router.get('/company/onboarding/:token', async (req: Request, res: Response) => {
   try {
     const { token } = req.params;
