@@ -9,12 +9,14 @@ import mongoose from 'mongoose';
 import axios from 'axios';
 import { verifyCFAdminToken } from '../middleware/verifyCFAdminToken';
 import { verifyToken } from '../middleware/verifyToken';
+import { verifyCompanyAdminToken } from '../middleware/verifyCompanyAdminToken';
 import {
   publishCompanyAdminRemoved,
   publishCompanyApiKeyStatusChanged,
   publishCompanyStatusChanged,
   publishCompanyVerified
 } from '../utils/kafkaPublisher';
+import { createAuditLog, extractUserInfo } from '../utils/auditLogger';
 // Attempt to use bcryptjs if available; fallback to crypto.scrypt otherwise
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let bcrypt: any = null;
@@ -147,7 +149,17 @@ router.post('/register', async (req: Request, res: Response) => {
         }
       });
     }
-    const { companyName, companyEmail, companyAddress, companyPhone, companyWebsite, companyLogo, companyDescription, companyDetails, companyCategory, companySubCategory } = req.body;
+    const { companyName, companyEmail, companyAddress, companyPhone, companyWebsite, companyLogo, companyDescription, companyDetails, companyCategory, companySubCategory, deliveryTimeHours } = req.body;
+    
+    // Validate deliveryTimeHours if provided
+    if (deliveryTimeHours !== undefined) {
+      if (typeof deliveryTimeHours !== 'number' || deliveryTimeHours < 0.5 || deliveryTimeHours > 168) {
+        return res.status(400).json({
+          message: 'Validation error',
+          error: 'deliveryTimeHours must be a number between 0.5 and 168 (hours)'
+        });
+      }
+    }
     
     // Force isVerified to false - companies cannot self-verify
     // Only CF Admins can verify companies via PATCH /company/:companyId/verify
@@ -177,7 +189,8 @@ router.post('/register', async (req: Request, res: Response) => {
       companyCategory, 
       companySubCategory, 
       companyApiKey,
-      isVerified: false // Always false on registration!😤
+      isVerified: false, // Always false on registration!😤
+      deliveryTimeHours: deliveryTimeHours || 2 // Default to 2 hours if not provided
     });
 
     const companySafe = company.toObject();
@@ -193,19 +206,20 @@ router.post('/register', async (req: Request, res: Response) => {
  * 
  * Creates a company admin account linked to a specific company. The admin
  * email must first be added to the company's admin emails list by a CF Admin.
- * The company must be verified before admins can register.
+ * The system automatically finds the company by checking if the email is in
+ * the company's admin emails list. The company must be verified before admins can register.
  * 
  * @route POST /company-admin/register
- * @access Public (but requires company API key in header)
+ * @access Public
  * 
- * @param {string} req.headers.your_company_api_key - Company API key (required)
- * @param {string} req.body.companyAdminName - Full name of the company admin
- * @param {string} req.body.companyAdminEmail - Email address (must be in company's admin emails list)
- * @param {string} req.body.companyAdminPassword - Password for the admin account
+ * @param {string} req.body.companyAdminName - Full name of the company admin (required)
+ * @param {string} req.body.companyAdminEmail - Email address (must be in company's admin emails list) (required)
+ * @param {string} req.body.companyAdminPassword - Password for the admin account (required)
  * 
  * @returns {Object} 201 - Company admin registered successfully
  * @returns {Object} 400 - Validation error (missing fields)
- * @returns {Object} 401 - Company not found or not verified
+ * @returns {Object} 401 - Company not verified
+ * @returns {Object} 404 - Company not found (email not in any company's admin emails list)
  * @returns {Object} 409 - Admin email not linked to company or admin already exists
  */
 router.post('/company-admin/register', async (req: Request, res: Response) => {
@@ -216,27 +230,38 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
         errors: {
           companyAdminName: !req.body.companyAdminName ? 'Company admin name is required' : null,
           companyAdminEmail: !req.body.companyAdminEmail ? 'Company admin email is required' : null,
-          companyAdminPassword: !req.body.companyAdminPassword ? 'Company admin password is required' : null,
-          // companyApiKey: !req.body.companyApiKey ? 'Company API key is required' : null // Company API key is required in the header (your_company_api_key)
+          companyAdminPassword: !req.body.companyAdminPassword ? 'Company admin password is required' : null
         }
       });
     }
     const { companyAdminName, companyAdminEmail, companyAdminPassword } = req.body;
-    const companyApiKey = req.headers['your_company_api_key'] as string;
 
-    // Ensures company exists and is verified by checking the API key in the header (your_company_api_key) in the Company model in the companyDB.
-    const companyExists = await Company.findOne({ companyApiKey: companyApiKey });
-    if (!companyExists || !companyExists.isVerified) {
-      return res.status(401).json({ message: 'Invalid credentials', error: 'Company not found with this API key or company is not verified' });
+    // Find company by checking if the admin email is in the companyAdminEmails array
+    // This allows registration without requiring the API key in the header
+    const companyExists = await Company.findOne({
+      companyAdminEmails: { $regex: new RegExp(`^${companyAdminEmail.toLowerCase()}$`, 'i') }
+    });
+    
+    if (!companyExists) {
+      return res.status(404).json({ message: 'Company not found', error: 'No company found with this admin email. Please contact your company administrator to add your email to the company admin list.' });
+    }
+    
+    if (!companyExists.isVerified) {
+      return res.status(401).json({ message: 'Company not verified', error: 'Company is not verified. Please wait for verification before registering.' });
     }
 
     // Checks if the admin email is linked to this company by checking the companyAdminEmails array in the Company model in the companyDB.
-    const adminEmailListed = (companyExists.companyAdminEmails || []).includes(companyAdminEmail);
+    const adminEmailListed = (companyExists.companyAdminEmails || []).some(
+      (email: string) => email.toLowerCase() === companyAdminEmail.toLowerCase()
+    );
     if (!adminEmailListed) {
       return res.status(409).json({ message: 'Admin not linked to this company', error: 'Company admin is not linked to this company' });
     }
+    
     // Checks if the admin already exists in the companyAdminIDDetails array in the Company model in the companyDB.
-    const adminAlreadyExists = companyExists.companyAdminIDDetails.find((admin: { companyAdminEmail: string }) => admin.companyAdminEmail === companyAdminEmail);
+    const adminAlreadyExists = companyExists.companyAdminIDDetails.find(
+      (admin: { companyAdminEmail: string }) => admin.companyAdminEmail.toLowerCase() === companyAdminEmail.toLowerCase()
+    );
 
     if (adminAlreadyExists) {
       return res.status(409).json({ message: 'Admin already exists', error: 'Admin already exists with this email for this company' });
@@ -253,7 +278,28 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
     }
 
     // Pushes the company admin to the companyAdminIDDetails array in the Company model in the companyDB.
-    await Company.updateOne({ companyApiKey: companyApiKey }, { $push: { companyAdminIDDetails: { companyAdminName, companyAdminEmail, companyAdminPassword: hashedPassword } } });
+    await Company.updateOne(
+      { _id: companyExists._id },
+      { $push: { companyAdminIDDetails: { companyAdminName, companyAdminEmail, companyAdminPassword: hashedPassword } } }
+    );
+    
+    // Create audit log
+    await createAuditLog({
+      action: 'company_admin_registered',
+      performedBy: companyExists.companyName,
+      performedByRole: 'merchant_admin',
+      performedById: companyExists._id.toString(),
+      performedByName: companyExists.companyName,
+      targetCompany: companyExists._id.toString(),
+      targetCompanyName: companyExists.companyName,
+      targetAdmin: companyAdminEmail,
+      details: {
+        adminName: companyAdminName,
+        adminEmail: companyAdminEmail,
+      },
+      service: 'company-service',
+    }, req);
+    
     res.status(201).json({ message: 'Company admin registered successfully', companyAdminName, companyAdminEmail, companyAdminPassword: hashedPassword });
   } catch (error: any) {
     res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
@@ -263,55 +309,60 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
 /**
  * Login endpoint for company admins.
  * 
- * Authenticates a company admin using email, password, and company API key.
- * Returns a JWT token that includes company information for authorization.
+ * Authenticates a company admin using email and password only.
+ * The system automatically finds the company associated with the admin email.
+ * Returns a JWT token that includes company information (including API key) for authorization.
  * The company must be verified and active for login to succeed.
  * 
  * @route POST /company-admin/login
- * @access Public (but requires company API key in header)
+ * @access Public
  * 
- * @param {string} req.headers.your_company_api_key - Company API key (required)
- * @param {string} req.body.companyAdminEmail - Company admin email
- * @param {string} req.body.companyAdminPassword - Company admin password
+ * @param {string} req.body.companyAdminEmail - Company admin email (required)
+ * @param {string} req.body.companyAdminPassword - Company admin password (required)
  * 
  * @returns {Object} 200 - Login successful with JWT token and admin details
  * @returns {Object} 400 - Validation error (missing fields)
- * @returns {Object} 401 - Invalid credentials (company not found, not verified, or incorrect password)
+ * @returns {Object} 401 - Invalid credentials (company admin not found, company not verified, or incorrect password)
  */
 router.post('/company-admin/login', async (req: Request, res: Response) => {
-  const companyApiKey = req.headers['your_company_api_key'] as string;
   const startTime = Date.now();
   
   try {
-    console.log(`[Login] Starting login attempt for API key: ${companyApiKey?.substring(0, 10)}...`);
-    
     const { companyAdminEmail, companyAdminPassword } = req.body;
-    if (!companyAdminEmail || !companyAdminPassword || !companyApiKey) {
+    if (!companyAdminEmail || !companyAdminPassword) {
       return res.status(400).json({
         message: 'All fields are required',
         errors: {
           companyAdminEmail: !companyAdminEmail ? 'Company admin email is required' : null,
-          companyAdminPassword: !companyAdminPassword ? 'Company admin password is required' : null,
-          companyApiKey: !companyApiKey ? 'Company API key is required in header (your_company_api_key)' : null
+          companyAdminPassword: !companyAdminPassword ? 'Company admin password is required' : null
         }
       });
     }
 
-    // Check if company exists and is verified by checking the API key in the header (your_company_api_key) in the Company model in the companyDB.
-    console.log(`[Login] Querying database for company with API key...`);
+    console.log(`[Login] Starting login attempt for email: ${companyAdminEmail}`);
+    
+    // Find company by searching for the admin email in companyAdminIDDetails array
+    console.log(`[Login] Querying database for company with admin email...`);
     const dbQueryStart = Date.now();
     
-    // Add maxTimeMS to prevent queries from hanging indefinitely
-    const companyExists = await Company.findOne({ companyApiKey: companyApiKey })
+    // Search for company that has this admin email in companyAdminIDDetails
+    const companyExists = await Company.findOne({
+      'companyAdminIDDetails.companyAdminEmail': { $regex: new RegExp(`^${companyAdminEmail.toLowerCase()}$`, 'i') }
+    })
       .maxTimeMS(10000) // 10 second timeout for the query
       .lean()
       .exec();
     
     console.log(`[Login] Database query took ${Date.now() - dbQueryStart}ms`);
     
-    if (!companyExists || !companyExists.isVerified) {
-      console.log(`[Login] Company not found or not verified`);
-      return res.status(401).json({ message: 'Invalid credentials', error: 'Company not found with this API key or company is not verified' });
+    if (!companyExists) {
+      console.log(`[Login] Company not found for admin email: ${companyAdminEmail}`);
+      return res.status(401).json({ message: 'Invalid credentials', error: 'Company admin not found with this email' });
+    }
+    
+    if (!companyExists.isVerified) {
+      console.log(`[Login] Company not verified: ${companyExists.companyName}`);
+      return res.status(401).json({ message: 'Invalid credentials', error: 'Company is not verified' });
     }
     
     console.log(`[Login] Company found: ${companyExists.companyName}`);
@@ -600,6 +651,21 @@ router.post('/add-admin-email-to-company', verifyCFAdminToken, async (req: Reque
       });
     }
 
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'admin_email_added_to_company',
+      ...userInfo,
+      targetCompany: updatedCompany._id.toString(),
+      targetCompanyName: updatedCompany.companyName,
+      targetAdmin: newAdminEmail.toLowerCase(),
+      details: {
+        adminEmail: newAdminEmail.toLowerCase(),
+        companyName: updatedCompany.companyName,
+      },
+      service: 'company-service',
+    }, req);
+
     return res.status(200).json({
       message: 'Admin email added to company admin emails successfully',
       company: {
@@ -666,6 +732,21 @@ router.patch('/company/:companyId/verify', verifyCFAdminToken, async (req: Reque
 
     await company.save();
 
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'company_verified',
+      ...userInfo,
+      targetCompany: company._id.toString(),
+      targetCompanyName: company.companyName,
+      details: {
+        oldValue: wasVerified,
+        newValue: isVerified,
+        onboardingTokenGenerated: tokenAssigned,
+      },
+      service: 'company-service',
+    }, req);
+
     if (isVerified && tokenAssigned && onboardingLink) {
       await publishCompanyVerified({
         companyId: company._id.toString(),
@@ -723,13 +804,28 @@ router.patch('/company/:companyId/api-key/status', verifyCFAdminToken, async (re
     company.apiKeyActive = active;
     await company.save();
 
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'company_api_key_status_changed',
+      ...userInfo,
+      targetCompany: company._id.toString(),
+      targetCompanyName: company.companyName,
+      details: {
+        oldValue: previous,
+        newValue: active,
+        status: active ? 'active' : 'inactive',
+      },
+      service: 'company-service',
+    }, req);
+
     if (previous !== active) {
       await publishCompanyApiKeyStatusChanged({
         companyId: company._id.toString(),
         companyName: company.companyName,
         companyEmail: company.companyEmail,
         status: active ? 'active' : 'inactive',
-        changerEmail: req.body.adminEmail
+        changerEmail: req.body.adminEmail || userInfo.performedBy
       });
     }
 
@@ -779,6 +875,22 @@ router.patch('/company/:companyId/status', verifyCFAdminToken, async (req: Reque
     company.isActive = isActive;
     await company.save();
 
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'company_status_changed',
+      ...userInfo,
+      targetCompany: company._id.toString(),
+      targetCompanyName: company.companyName,
+      details: {
+        oldValue: previous,
+        newValue: isActive,
+        status: isActive ? 'active' : 'inactive',
+        reason: reason || undefined,
+      },
+      service: 'company-service',
+    }, req);
+
     if (previous !== isActive) {
       await publishCompanyStatusChanged({
         companyId: company._id.toString(),
@@ -786,7 +898,7 @@ router.patch('/company/:companyId/status', verifyCFAdminToken, async (req: Reque
         companyEmail: company.companyEmail,
         isActive,
         reason,
-        changedBy: req.body.adminEmail
+        changedBy: req.body.adminEmail || userInfo.performedBy
       });
     }
 
@@ -844,14 +956,29 @@ router.delete('/company/company-admin', verifyCFAdminToken, async (req: Request,
     company.companyAdminEmails = (company.companyAdminEmails || []).filter(email => email.toLowerCase() !== normalizedEmail);
     await company.save();
 
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'company_admin_removed',
+      ...userInfo,
+      targetCompany: company._id.toString(),
+      targetCompanyName: company.companyName,
+      targetAdmin: normalizedEmail,
+      details: {
+        removedAdminEmail: normalizedEmail,
+        companyName: company.companyName,
+      },
+      service: 'company-service',
+    }, req);
+
     await publishCompanyAdminRemoved({
       companyId: company._id.toString(),
       companyName: company.companyName,
       companyEmail: company.companyEmail,
       adminEmail: normalizedEmail,
       removedBy: {
-        adminEmail: req.body.adminEmail,
-        adminName: req.body.adminName
+        adminEmail: req.body.adminEmail || userInfo.performedBy,
+        adminName: req.body.adminName || userInfo.performedByName
       }
     });
 
@@ -924,6 +1051,93 @@ router.get('/company/onboarding/:token', async (req: Request, res: Response) => 
   } catch (error: any) {
     console.error('Error redeeming onboarding token:', error);
     return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
+
+/**
+ * Toggle service availability status for a company.
+ * 
+ * Allows company admins to activate or deactivate their service to stop receiving
+ * orders. When deactivated, customers will receive a notification that the service
+ * is currently unavailable when attempting to place orders. Useful for closing
+ * hours, maintenance, or temporary unavailability.
+ * 
+ * @route PATCH /company/service-status
+ * @access Private (requires Company Admin JWT token)
+ * 
+ * @param {boolean} req.body.isServiceActive - Whether to activate (true) or deactivate (false) the service
+ * @param {string} [req.body.reason] - Optional reason for status change (for internal tracking)
+ * 
+ * @returns {Object} 200 - Service status updated successfully
+ * @returns {Object} 400 - Validation error (isServiceActive must be boolean)
+ * @returns {Object} 403 - Access denied (company not verified or inactive)
+ */
+router.patch('/company/service-status', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { isServiceActive, reason } = req.body;
+    
+    if (typeof isServiceActive !== 'boolean') {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'isServiceActive field is required and must be a boolean'
+      });
+    }
+
+    const companyId = res.locals.companyId;
+    const company = await Company.findById(companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system'
+      });
+    }
+
+    // Ensure company is verified and active
+    if (!company.isVerified || !company.isActive) {
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Your company must be verified and active to manage service status'
+      });
+    }
+
+    const previousStatus = company.isServiceActive;
+    company.isServiceActive = isServiceActive;
+    await company.save();
+
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'company_service_status_changed',
+      ...userInfo,
+      targetCompany: company._id.toString(),
+      targetCompanyName: company.companyName,
+      details: {
+        oldValue: previousStatus,
+        newValue: isServiceActive,
+        status: isServiceActive ? 'active' : 'inactive',
+        reason: reason || undefined,
+      },
+      service: 'company-service',
+    }, req);
+
+    return res.status(200).json({
+      message: `Service ${isServiceActive ? 'activated' : 'deactivated'} successfully`,
+      company: {
+        id: company._id,
+        companyName: company.companyName,
+        isServiceActive: company.isServiceActive,
+        message: isServiceActive 
+          ? 'Your service is now active and accepting orders'
+          : 'Your service is now inactive. Customers will be notified that you are not currently receiving orders.'
+      }
+    });
+  } catch (error: any) {
+    console.error('Error updating service status:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
   }
 });
 

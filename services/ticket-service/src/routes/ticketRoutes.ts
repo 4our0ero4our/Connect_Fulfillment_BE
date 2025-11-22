@@ -9,6 +9,7 @@ import {
 } from '../middleware/accessControl';
 import { createTicket, validateTicketAndMarkUsed } from '../services/ticketService';
 import { getTicketCache, setTicketCache, isTicketAlreadyUsed } from '../utils/cache';
+import { createAuditLog, extractUserInfo } from '../utils/auditLogger';
 
 const router = Router();
 
@@ -355,6 +356,26 @@ router.post('/validate', requireCompanyContext, async (req: Request, res: Respon
       location,
       notes,
     });
+
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'ticket_validated',
+      ...userInfo,
+      targetCompany: ticket.companyId,
+      targetCompanyName: ticket.companyName,
+      targetOrder: ticket.orderId,
+      targetOrderNumber: ticket.orderNumber,
+      targetTicket: ticket.ticketId,
+      details: {
+        ticketId: ticket.ticketId,
+        orderNumber: ticket.orderNumber,
+        location: location || undefined,
+        notes: notes || undefined,
+        customerEmail: ticket.issuedTo.customerEmail,
+      },
+      service: 'ticket-service',
+    }, req);
 
     return res.status(200).json({
       message: 'Ticket validated successfully',

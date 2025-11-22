@@ -12,6 +12,10 @@ import {
   handleCompanyStatusChanged,
   handleCompanyAdminRemoved,
   handleOrderSoftDeleted,
+  handleOrderCreated,
+  handleSupportTicketCreated,
+  handleMessageCreated,
+  handleSupportTicketStatusUpdated,
 } from '../services/notificationService';
 
 dotenv.config();
@@ -29,6 +33,7 @@ const consumer = kafka.consumer({
 let consumerConnected = false;
 
 const topicHandlers: Record<string, (payload: any) => Promise<void>> = {
+  order_created: handleOrderCreated,
   order_status_updated: handleOrderStatusUpdated,
   ticket_generated: handleTicketGenerated,
   ticket_attached_to_order: handleTicketGenerated,
@@ -42,6 +47,9 @@ const topicHandlers: Record<string, (payload: any) => Promise<void>> = {
   company_status_changed: handleCompanyStatusChanged,
   company_admin_removed: handleCompanyAdminRemoved,
   order_soft_deleted: handleOrderSoftDeleted,
+  support_ticket_created: handleSupportTicketCreated,
+  message_created: handleMessageCreated,
+  support_ticket_status_updated: handleSupportTicketStatusUpdated,
 };
 
 export const startNotificationConsumers = async () => {

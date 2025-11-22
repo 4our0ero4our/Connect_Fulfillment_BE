@@ -59,6 +59,7 @@ services:
       - ticket-service
       - company-service
       - notification-service
+      - messaging-service
     environment:
       - NODE_ENV=development
       - JWT_SECRET=${JWT_SECRET}
@@ -152,6 +153,24 @@ services:
       - CF_BRAND_LOGO_URL=${CF_BRAND_LOGO_URL}
     depends_on:
       - kafka
+    networks:
+      - app-network
+
+  messaging-service:
+    build: ./services/messaging-service
+    ports:
+      - "4006:4006"
+    environment:
+      - MONGO_URI=${MESSAGING_MONGO_URI}
+      - ADMIN_MONGO_URI=${ADMIN_MONGO_URI}
+      - KAFKA_BROKERS=kafka:9092
+      - JWT_SECRET=${JWT_SECRET}
+      - COMPANY_SERVICE_URL=http://company-service:4004
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+    depends_on:
+      - mongodb
+      - kafka
+      - company-service
     networks:
       - app-network
 

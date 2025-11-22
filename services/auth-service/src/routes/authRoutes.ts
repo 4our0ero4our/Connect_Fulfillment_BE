@@ -11,6 +11,7 @@ import { verifyCFAdminToken } from '../middleware/verifyCFAdminToken';
 import { verifyLeadCFAdmin } from '../middleware/verifyLeadCFAdmin';
 import { preserveRequestBody } from '../middleware/preserveRequestBody';
 import { Staff } from '../models/Staff';
+import { createAuditLog, extractUserInfo } from '../utils/auditLogger';
 
 const router = Router();
 // Try multiple paths for .env file (works in both local and Docker)
@@ -510,6 +511,22 @@ router.post('/change-password', rateLimit(5, 60, 'change-password'), async (req:
     const hashedNewPassword = await bcrypt.hash(newPassword, 12);
     admin.password = hashedNewPassword;
     await admin.save();
+    
+    // Create audit log
+    await createAuditLog({
+      action: 'admin_password_changed',
+      performedBy: adminEmail.toLowerCase(),
+      performedByRole: 'cf_admin',
+      performedById: admin._id.toString(),
+      performedByName: admin.adminName,
+      targetAdmin: adminEmail.toLowerCase(),
+      details: {
+        adminEmail: adminEmail.toLowerCase(),
+        adminName: admin.adminName,
+      },
+      service: 'auth-service',
+    }, req);
+    
     return res.status(200).json({ message: 'Your password has been changed successfully. Please login with your new password.' });
   } catch (error: any) {
     return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
@@ -586,6 +603,22 @@ router.post('/add-staff', rateLimit(5, 60, 'add-staff'), verifyCFAdminToken, ver
       canBeCFAdmin: canBeCFAdmin,
       isALeadCFAdmin: isALeadCFAdmin
     });
+
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'staff_added',
+      ...userInfo,
+      targetStaff: newStaffEmail.toLowerCase(),
+      details: {
+        staffName: newStaffName,
+        staffEmail: newStaffEmail.toLowerCase(),
+        staffRole: newStaffRole,
+        canBeCFAdmin: canBeCFAdmin || false,
+        isALeadCFAdmin: isALeadCFAdmin || false,
+      },
+      service: 'auth-service',
+    }, req);
 
     // Return staff without sensitive data
     const staffResponse = staff.toObject();
@@ -673,6 +706,10 @@ router.post('/update-staff-admin-status', rateLimit(5, 60, 'update-staff-admin-s
         error: 'The staff email you provided was not found in the database'
       });
     }
+    // Get old value before update
+    const oldStaff = await Staff.findOne({ email: staffEmail });
+    const oldCanBeCFAdmin = oldStaff?.canBeCFAdmin || false;
+    
     // Updates the staff admin status
     await Staff.updateOne({ email: staffEmail }, { $set: { canBeCFAdmin: canBeCFAdmin } });
     const updatedStaff = await Staff.findOne({ email: staffEmail });
@@ -682,6 +719,22 @@ router.post('/update-staff-admin-status', rateLimit(5, 60, 'update-staff-admin-s
         error: 'The recently updated staff was not found in the database'
       });
     }
+    
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'staff_admin_status_updated',
+      ...userInfo,
+      targetStaff: staffEmail.toLowerCase(),
+      details: {
+        oldValue: oldCanBeCFAdmin,
+        newValue: canBeCFAdmin,
+        staffEmail: staffEmail.toLowerCase(),
+        staffName: updatedStaff.name,
+      },
+      service: 'auth-service',
+    }, req);
+    
     const staffResponse = updatedStaff.toObject();
     return res.status(200).json({
       message: 'Staff admin status updated successfully', staff: {
@@ -754,6 +807,9 @@ router.delete('/delete-staff', rateLimit(5, 60, 'delete-staff'), verifyCFAdminTo
       });
     }
 
+    // Get staff info before deletion for audit log
+    const staffToDelete = await Staff.findOne({ email: staffEmail.toLowerCase() });
+    
     // Deletes the staff from the database
     const deleteResult = await Staff.deleteOne({ email: staffEmail.toLowerCase() });
     if (deleteResult.deletedCount === 0) {
@@ -762,6 +818,20 @@ router.delete('/delete-staff', rateLimit(5, 60, 'delete-staff'), verifyCFAdminTo
         error: 'The staff could not be deleted or was not found'
       });
     }
+
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'staff_deleted',
+      ...userInfo,
+      targetStaff: staffEmail.toLowerCase(),
+      details: {
+        staffEmail: staffEmail.toLowerCase(),
+        staffName: staffToDelete?.name || 'Unknown',
+        staffRole: staffToDelete?.role || 'Unknown',
+      },
+      service: 'auth-service',
+    }, req);
 
     return res.status(200).json({
       message: `Unfortunately and officially, ${staffEmail} is no more a Connect Fulfillment staff. Baba don pass him boundary bah? 🤣. It wasn't nice while it lasted, anyway! 💀`
@@ -887,6 +957,20 @@ router.delete('/remove-admin', rateLimit(5, 60, 'remove-admin'), preserveRequest
     );
     
     console.log(`Admin ${normalizedEmail} removed. Staff collection updated:`, updateResult.modifiedCount > 0 ? 'Yes' : 'No');
+    
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'cf_admin_removed',
+      ...userInfo,
+      targetAdmin: normalizedEmail,
+      details: {
+        removedAdminEmail: normalizedEmail,
+        removedAdminName: admin.adminName,
+        staffUpdated: updateResult.modifiedCount > 0,
+      },
+      service: 'auth-service',
+    }, req);
     
     return res.status(200).json({
       message: `Unfortunately and officially, ${adminEmail} is no more a Connect Fulfillment admin. Baba don pass him boundary bah? 🤣. It wasn't fun while it lasted, anyway! 💀`,

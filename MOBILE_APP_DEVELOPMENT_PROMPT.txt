@@ -1,0 +1,810 @@
+================================================================================
+FULFILLMATE MOBILE APP DEVELOPMENT PROMPT
+================================================================================
+
+This document provides comprehensive guidance for building the FulfillMate mobile
+application for both Merchant Admins and Customers, with role-based features and
+real-time synchronization with the backend and dashboards.
+
+================================================================================
+PROJECT OVERVIEW
+================================================================================
+
+FulfillMate Mobile App is a cross-platform application that serves two distinct
+user types with different feature sets:
+
+1. **MERCHANT ADMIN APP** - For merchant company admins
+   - Primary use: Scan QR tickets and validate orders in real-time
+   - Secondary: View orders, update order status, manage tickets
+
+2. **CUSTOMER APP** - For end customers
+   - Primary use: Track order status, receive push notifications
+   - Secondary: View order history, ticket QR codes, order details
+
+**Key Requirement:** All status changes made in the mobile app MUST reflect in
+real-time on the web dashboards, and vice versa. This requires WebSocket or
+polling-based real-time synchronization.
+
+================================================================================
+BACKEND ARCHITECTURE SUMMARY
+================================================================================
+
+Microservices Architecture:
+- API Gateway (Port 4000) - Single entry point, API key validation
+- Auth Service (Port 4001) - FulfillMate Admin authentication
+- Company Service (Port 4004) - Merchant onboarding, company admin auth
+- Order Service (Port 4002) - Order lifecycle management
+- Ticket Service (Port 4003) - QR ticket generation and validation
+- Notification Service (Port 4005) - Email dispatch via SMTP
+
+Technology Stack:
+- Node.js + TypeScript + Express
+- MongoDB (separate database per service)
+- Redis (rate limiting, caching)
+- Kafka (event-driven communication)
+- Docker Compose (orchestration)
+
+Base URL: http://localhost:4000 (via API Gateway)
+
+**Note:** Real-time updates currently use Kafka events. For mobile app real-time
+sync, you'll need to implement WebSocket support or polling with short intervals.
+
+================================================================================
+AUTHENTICATION & AUTHORIZATION
+================================================================================
+
+1. MERCHANT ADMIN AUTHENTICATION:
+   - Endpoint: POST /company/company-admin/login
+   - Headers: your_company_api_key: <api-key>
+   - Request: { companyAdminEmail, companyAdminPassword }
+   - Response: { token, companyAdmin: { companyAdminName, companyAdminEmail, companyId, companyName } }
+   - Token Expiry: 24 hours
+   - Header: Authorization: Bearer <token>
+   - Access: Only their company's orders and tickets
+
+2. CUSTOMER AUTHENTICATION (Email-based):
+   - Endpoint: POST /orders/customer (no auth required)
+   - Request: { customerEmail }
+   - Response: { orders: [...] }
+   - Alternative: Email verification code for secure access
+   - Access: Only their own orders
+
+3. PUSH NOTIFICATION TOKENS:
+   - Store device tokens (FCM for Android, APNS for iOS)
+   - Endpoint: POST /notifications/register-device (to be implemented)
+   - Required: deviceToken, platform (ios/android), userId, userType
+
+================================================================================
+MERCHANT ADMIN APP FEATURES
+================================================================================
+
+PRIMARY FEATURES (MVP):
+
+1. **QR TICKET SCANNER** ⭐ (Core Feature)
+   - Camera-based QR code scanner
+   - Scan ticket QR codes from customer phones/emails
+   - Validate ticket immediately (POST /ticket/validate)
+   - Show ticket details (order number, customer info, items)
+   - Mark ticket as validated/completed
+   - Add validation notes and location
+   - Real-time sync: Status updates reflect on dashboard immediately
+
+2. **ORDER MANAGEMENT**
+   - View company orders (GET /orders - auto-filtered by company)
+   - Filter by status (pending, processing, packed, completed, cancelled)
+   - Search orders by order number or customer email
+   - View order details (GET /orders/:orderId)
+   - Update order status (PATCH /orders/:orderId/status)
+     - Status flow: pending → processing → packed → completed
+   - Real-time updates: New orders appear automatically
+   - Pull-to-refresh for manual sync
+
+3. **TICKET MANAGEMENT**
+   - View tickets for orders (GET /ticket/tickets/order/:orderId)
+   - View ticket by ID (GET /ticket/tickets/:ticketId)
+   - See ticket validation history
+   - Resend ticket to customer (if endpoint exists)
+
+4. **DASHBOARD OVERVIEW**
+   - Today's orders count
+   - Orders by status (pending, processing, packed, completed)
+   - Recent orders list
+   - Quick stats (total orders, completed today, etc.)
+
+5. **SERVICE STATUS TOGGLE**
+   - Toggle service availability (PATCH /company/service-status)
+   - Quick toggle button: "Accepting Orders" / "Not Accepting Orders"
+   - Visual indicator of current status
+
+SECONDARY FEATURES (Nice to Have):
+
+6. **NOTIFICATIONS**
+   - Push notifications for new orders
+   - Push notifications for order status changes
+   - In-app notification center
+   - Badge counts for unread notifications
+
+7. **CUSTOMER LOOKUP**
+   - Search customer orders by email (POST /orders/customer)
+   - View customer order history
+   - Helpful for customer support
+
+8. **ANALYTICS**
+   - Daily/weekly/monthly order statistics
+   - Order trends charts
+   - Revenue summaries (if available)
+
+9. **PROFILE & SETTINGS**
+   - View company profile
+   - Change password (POST /auth/change-password)
+   - Logout
+   - App settings (notifications, theme, etc.)
+
+================================================================================
+CUSTOMER APP FEATURES
+================================================================================
+
+PRIMARY FEATURES (MVP):
+
+1. **ORDER TRACKING** ⭐ (Core Feature)
+   - View all orders by email (POST /orders/customer)
+   - Real-time order status updates
+   - Order status timeline (pending → processing → packed → completed)
+   - Order details view:
+     - Order number
+     - Items list with quantities and prices
+     - Total amount
+     - Merchant name
+     - Order date
+     - Expected ready time (from deliveryTimeHours)
+   - Pull-to-refresh for manual sync
+
+2. **PUSH NOTIFICATIONS** ⭐ (Core Feature)
+   - Order confirmation notifications
+   - Order status update notifications
+   - Ticket ready notifications (when order is packed)
+   - Order completed notifications
+   - Notification settings (enable/disable by type)
+
+3. **QR TICKET VIEWER**
+   - View ticket QR code for pickup
+   - Download/save ticket to device
+   - Show ticket details (order number, merchant, expiration)
+   - Instructions for pickup
+   - Ticket validation status
+
+4. **ORDER HISTORY**
+   - List of all past orders
+   - Filter by status
+   - Search by order number
+   - Order details with full history
+
+SECONDARY FEATURES (Nice to Have):
+
+5. **ORDER DETAILS ENHANCED**
+   - Estimated ready time countdown
+   - Merchant contact information
+   - Pickup location details
+   - Order notes/instructions
+
+6. **NOTIFICATION CENTER**
+   - In-app notification history
+   - Mark as read/unread
+   - Filter by type
+   - Clear all notifications
+
+7. **MULTI-MERCHANT SUPPORT**
+   - Orders from multiple merchants
+   - Group by merchant
+   - Merchant-specific order views
+
+8. **SHARING**
+   - Share order details
+   - Share ticket QR code
+   - Share order status
+
+9. **SETTINGS**
+   - Email verification for secure access
+   - Notification preferences
+   - App theme (light/dark)
+   - Language settings
+
+================================================================================
+REAL-TIME SYNCHRONIZATION REQUIREMENTS
+================================================================================
+
+CRITICAL: All status changes must reflect in real-time across:
+- Mobile app (merchant admin)
+- Mobile app (customer)
+- Web dashboard (CF admin)
+- Web dashboard (merchant admin)
+
+IMPLEMENTATION OPTIONS:
+
+Option 1: WebSocket Connection (Recommended) ⭐
+- Establish WebSocket connection on app startup
+- Subscribe to order/ticket update events
+- Receive real-time updates when status changes
+- Reconnect automatically on connection loss
+- Libraries: Socket.io-client, native WebSocket
+
+Option 2: Polling with Short Intervals
+- Poll every 5-10 seconds for updates
+- Check for new orders or status changes
+- Less efficient but simpler to implement
+- Use timestamps to only fetch new data
+
+Option 3: Server-Sent Events (SSE)
+- One-way real-time updates from server
+- Simpler than WebSocket for one-way communication
+- Good for status updates
+
+RECOMMENDED APPROACH:
+1. Implement WebSocket server in backend (new service or extend existing)
+2. Mobile app connects via WebSocket
+3. When order status changes, backend publishes to WebSocket
+4. All connected clients (mobile + web) receive update instantly
+5. Fallback to polling if WebSocket unavailable
+
+WebSocket Events to Implement:
+- order_status_updated - When order status changes
+- order_created - When new order is created
+- ticket_validated - When ticket is scanned/validated
+- ticket_generated - When ticket is created
+- service_status_changed - When merchant toggles service
+
+================================================================================
+TECHNOLOGY STACK RECOMMENDATIONS
+================================================================================
+
+FRAMEWORK OPTIONS:
+
+1. **React Native** ⭐ (Recommended)
+   - Cross-platform (iOS + Android)
+   - Large community and libraries
+   - Easy to share code between platforms
+   - Good WebSocket support
+   - Push notification libraries available
+
+2. **Flutter**
+   - Cross-platform
+   - Good performance
+   - Growing ecosystem
+   - Push notification support
+
+3. **Native (Swift + Kotlin)**
+   - Best performance
+   - Platform-specific features
+   - More development time (two codebases)
+
+RECOMMENDED STACK (React Native):
+- React Native + TypeScript
+- React Navigation (routing)
+- Socket.io-client (WebSocket)
+- React Native Camera (QR scanning)
+- React Native Push Notification (FCM/APNS)
+- Axios (HTTP requests)
+- AsyncStorage (local storage)
+- React Query or SWR (data fetching/caching)
+
+KEY LIBRARIES:
+- `react-native-camera` or `react-native-vision-camera` - QR scanning
+- `@react-native-async-storage/async-storage` - Local storage
+- `socket.io-client` - WebSocket connection
+- `@react-native-firebase/messaging` - Push notifications
+- `react-native-push-notification` - Local notifications
+- `react-query` or `swr` - Data fetching and caching
+- `react-native-toast-message` - Toast notifications
+- `react-native-vector-icons` - Icons
+
+================================================================================
+API ENDPOINTS FOR MOBILE APP
+================================================================================
+
+MERCHANT ADMIN ENDPOINTS:
+
+Authentication:
+- POST /company/company-admin/login
+- GET /company/company-admin/verify-token
+
+Orders:
+- GET /orders - List company orders (auto-filtered)
+- GET /orders/:orderId - Get order details
+- PATCH /orders/:orderId/status - Update order status
+- DELETE /orders/:orderId - Soft delete order
+
+Tickets:
+- GET /ticket/tickets/:ticketId - Get ticket details
+- GET /ticket/tickets/order/:orderId - Get ticket by order
+- POST /ticket/validate - Validate ticket (QR scan)
+
+Company:
+- PATCH /company/service-status - Toggle service availability
+- GET /company/companies - Get company info (if endpoint exists)
+
+Customer Lookup:
+- POST /orders/customer - Search customer orders
+
+CUSTOMER ENDPOINTS:
+
+Orders:
+- POST /orders/customer - Get orders by email
+  - Request: { customerEmail, companyId?: "all" }
+  - Response: { orders: [...] }
+
+No authentication required, but email verification recommended for security.
+
+================================================================================
+UI/UX RECOMMENDATIONS
+================================================================================
+
+DESIGN PRINCIPLES:
+- Clean, modern, intuitive interface
+- Role-based navigation (different for merchant vs customer)
+- Fast loading with skeleton screens
+- Smooth animations and transitions
+- Offline support where possible
+- Pull-to-refresh on all list screens
+- Swipe actions for quick actions
+
+MERCHANT ADMIN UI:
+- Bottom tab navigation:
+  - Home (Dashboard/Stats)
+  - Scanner (QR code scanner - prominent)
+  - Orders (Order list)
+  - Tickets (Ticket list)
+  - Profile (Settings)
+- Floating action button for quick scan
+- Color-coded order status badges
+- Search bar in orders/tickets screens
+- Filter chips for status filtering
+
+CUSTOMER UI:
+- Bottom tab navigation:
+  - Orders (Order list with status)
+  - Track (Active orders tracking)
+  - Tickets (QR tickets for pickup)
+  - Notifications (Notification center)
+  - Profile (Settings)
+- Order status timeline visualization
+- Large, scannable QR code display
+- Estimated ready time countdown
+- Order status change animations
+
+SKELETON LOADERS:
+- Implement animated skeleton loaders for all data-fetching screens
+- Match actual component layouts
+- Shimmer/pulse animation effect
+- Show immediately on screen load
+- Replace with actual content when data arrives
+
+COLOR SCHEME:
+- Primary: Brand colors (define in design system)
+- Status colors:
+  - Pending: Yellow/Orange
+  - Processing: Blue
+  - Packed: Purple
+  - Completed: Green
+  - Cancelled: Red
+- Success: Green
+- Error: Red
+- Warning: Yellow/Orange
+- Info: Blue
+
+================================================================================
+PUSH NOTIFICATIONS IMPLEMENTATION
+================================================================================
+
+SETUP:
+
+1. **Firebase Cloud Messaging (FCM)** for Android
+2. **Apple Push Notification Service (APNS)** for iOS
+3. **Backend Endpoint** (to be implemented):
+   - POST /notifications/register-device
+   - Request: { deviceToken, platform, userId, userType }
+   - Store device tokens in database
+
+NOTIFICATION TYPES:
+
+For Customers:
+- Order confirmation (when order created)
+- Order status update (pending → processing → packed → completed)
+- Ticket ready (when order status = packed)
+- Order completed
+- Order cancelled
+
+For Merchant Admins:
+- New order received
+- Order status changed (if changed by CF admin)
+- Service status reminder (optional)
+
+NOTIFICATION PAYLOAD STRUCTURE:
+```json
+{
+  "title": "Order Status Updated",
+  "body": "Your order ORD-2025-123456 is now packed and ready for pickup",
+  "data": {
+    "type": "order_status_updated",
+    "orderId": "507f1f77bcf86cd799439011",
+    "orderNumber": "ORD-2025-123456",
+    "status": "packed",
+    "action": "view_order"
+  }
+}
+```
+
+HANDLING NOTIFICATIONS:
+- Tap notification → Navigate to relevant screen
+- Deep linking to order details
+- Badge counts for unread notifications
+- In-app notification center
+
+================================================================================
+QR CODE SCANNING IMPLEMENTATION
+================================================================================
+
+MERCHANT ADMIN SCANNER:
+
+1. **Camera Permission**
+   - Request camera permission on app start
+   - Handle permission denied gracefully
+   - Show permission request screen if needed
+
+2. **QR Scanner Screen**
+   - Full-screen camera view
+   - Scanning overlay/frame
+   - Flashlight toggle
+   - Manual ticket ID entry option
+   - Scan history (recent scans)
+
+3. **Scan Flow**
+   - Scan QR code → Extract ticket ID
+   - Validate ticket (POST /ticket/validate)
+   - Show ticket details modal
+   - Confirm validation
+   - Show success/error feedback
+   - Auto-close or scan next
+
+4. **QR Code Format**
+   - Base64 encoded JSON payload
+   - Contains: { t: ticketId, o: orderId, c: companyId }
+   - Decode and extract ticket ID
+
+5. **Error Handling**
+   - Invalid QR code format
+   - Ticket not found
+   - Ticket already validated
+   - Ticket expired
+   - Network errors
+   - Show user-friendly error messages
+
+CUSTOMER QR DISPLAY:
+
+1. **Ticket QR Code View**
+   - Large, scannable QR code
+   - Order number display
+   - Merchant name
+   - Expiration date/time
+   - Instructions for pickup
+   - Download/share options
+
+2. **QR Code Generation**
+   - Backend generates QR code
+   - Mobile app displays it
+   - Ensure high contrast for scanning
+   - Minimum size: 200x200px
+
+================================================================================
+OFFLINE SUPPORT
+================================================================================
+
+IMPLEMENT OFFLINE CAPABILITIES:
+
+1. **Data Caching**
+   - Cache orders locally (AsyncStorage)
+   - Cache tickets locally
+   - Show cached data when offline
+   - Sync when connection restored
+
+2. **Offline Actions Queue**
+   - Queue ticket validations when offline
+   - Queue order status updates
+   - Sync when connection restored
+   - Show pending sync indicator
+
+3. **Offline Indicators**
+   - Show connection status
+   - Disable actions that require network
+   - Show "Offline" banner
+   - Enable actions when online
+
+4. **Data Sync**
+   - Background sync when app opens
+   - Pull-to-refresh to force sync
+   - Conflict resolution (server wins)
+
+================================================================================
+SECURITY CONSIDERATIONS
+================================================================================
+
+1. **Token Storage**
+   - Store JWT tokens securely (Keychain/Keystore)
+   - Never log tokens
+   - Auto-refresh tokens before expiry
+   - Clear tokens on logout
+
+2. **API Key Security**
+   - Merchant admin API key stored securely
+   - Never expose in logs or error messages
+   - Rotate keys if compromised
+
+3. **Data Validation**
+   - Validate all user inputs
+   - Sanitize data before sending to API
+   - Handle API errors gracefully
+
+4. **Network Security**
+   - Use HTTPS only
+   - Certificate pinning (optional, for high security)
+   - Validate SSL certificates
+
+5. **Push Notification Security**
+   - Verify notification source
+   - Validate notification payloads
+   - Don't trust notification data blindly
+
+================================================================================
+TESTING RECOMMENDATIONS
+================================================================================
+
+1. **Unit Tests**
+   - Test API integration functions
+   - Test data transformation logic
+   - Test offline queue logic
+
+2. **Integration Tests**
+   - Test API calls with mock server
+   - Test WebSocket connections
+   - Test push notification handling
+
+3. **E2E Tests**
+   - Test complete user flows
+   - Test QR scanning flow
+   - Test order status updates
+   - Test real-time synchronization
+
+4. **Device Testing**
+   - Test on multiple devices (iOS/Android)
+   - Test different screen sizes
+   - Test camera permissions
+   - Test push notifications
+   - Test offline scenarios
+
+5. **Performance Testing**
+   - Test app startup time
+   - Test list rendering with many items
+   - Test image loading
+   - Test WebSocket reconnection
+
+================================================================================
+DEPLOYMENT CONSIDERATIONS
+================================================================================
+
+1. **App Stores**
+   - Apple App Store (iOS)
+   - Google Play Store (Android)
+   - App store listings and screenshots
+   - Privacy policy and terms of service
+
+2. **Environment Configuration**
+   - Development API URL
+   - Staging API URL
+   - Production API URL
+   - Feature flags
+
+3. **Versioning**
+   - Semantic versioning (1.0.0)
+   - Version code for stores
+   - Update notifications
+   - Force update mechanism (optional)
+
+4. **Analytics**
+   - User analytics (optional)
+   - Crash reporting (Sentry, Crashlytics)
+   - Performance monitoring
+   - User behavior tracking
+
+================================================================================
+DEVELOPMENT CHECKLIST
+================================================================================
+
+MERCHANT ADMIN APP:
+[ ] Authentication (login, token management)
+[ ] QR code scanner (camera, scanning, validation)
+[ ] Order list (view, filter, search)
+[ ] Order details (view, update status)
+[ ] Ticket management (view, validate)
+[ ] Service status toggle
+[ ] Real-time updates (WebSocket/polling)
+[ ] Push notifications
+[ ] Offline support
+[ ] Profile and settings
+[ ] Error handling
+[ ] Loading states with skeletons
+
+CUSTOMER APP:
+[ ] Email-based authentication/access
+[ ] Order list (view all orders)
+[ ] Order tracking (status timeline)
+[ ] Order details (full information)
+[ ] QR ticket viewer
+[ ] Push notifications
+[ ] Real-time status updates
+[ ] Notification center
+[ ] Offline support
+[ ] Settings
+[ ] Error handling
+[ ] Loading states with skeletons
+
+================================================================================
+ADDITIONAL MOBILE APP FEATURE SUGGESTIONS
+================================================================================
+
+1. **MERCHANT ADMIN ENHANCEMENTS:**
+   - 📊 **Analytics Dashboard**: Daily/weekly/monthly statistics, revenue charts
+   - 🔔 **Smart Notifications**: Customizable notification rules (e.g., notify only for orders > $X)
+   - 📸 **Photo Attachments**: Attach photos to order notes (e.g., damaged items)
+   - 🗺️ **Location Services**: Track pickup location for delivery orders
+   - ⏰ **Business Hours**: Set automatic service status based on business hours
+   - 📝 **Quick Notes**: Add quick notes to orders during validation
+   - 🔍 **Advanced Search**: Search by customer name, order number, date range
+   - 📊 **Order Reports**: Generate and export order reports
+   - 🎯 **Bulk Actions**: Select multiple orders for bulk status updates
+   - 📱 **Widget Support**: Home screen widget showing today's order count
+
+2. **CUSTOMER ENHANCEMENTS:**
+   - ⭐ **Order Ratings**: Rate orders after completion
+   - 💬 **Order Comments**: Add comments/feedback to orders
+   - 📍 **Store Locator**: Find merchant locations on map
+   - 🎁 **Loyalty Points**: Track loyalty points if implemented
+   - 📧 **Email Integration**: Link email account for automatic order detection
+   - 🔔 **Smart Notifications**: Customize which notifications to receive
+   - 📸 **Photo Proof**: Upload photos for order issues/complaints
+   - 🗓️ **Order Calendar**: Calendar view of orders
+   - 📊 **Order History Analytics**: Spending trends, favorite merchants
+   - 🎨 **Themes**: Light/dark mode, custom themes
+
+3. **SHARED FEATURES:**
+   - 🌐 **Multi-language Support**: i18n for multiple languages
+   - 🔐 **Biometric Authentication**: Face ID, Touch ID, Fingerprint
+   - 📱 **Widget Support**: Home screen widgets
+   - 🔄 **Auto-sync**: Background sync when app is closed
+   - 📊 **Usage Analytics**: Track app usage (optional, with privacy)
+   - 🎨 **Accessibility**: VoiceOver, TalkBack support
+   - 🔔 **Notification Scheduling**: Quiet hours, do not disturb
+
+================================================================================
+REAL-TIME SYNCHRONIZATION ARCHITECTURE
+================================================================================
+
+BACKEND REQUIREMENTS (To Be Implemented):
+
+1. **WebSocket Service** (New service or extend existing)
+   - Port: 4007 (or integrate into API Gateway)
+   - Socket.io or native WebSocket server
+   - Room-based connections:
+     - Merchant rooms: `company:${companyId}`
+     - Customer rooms: `customer:${customerEmail}`
+     - CF Admin room: `cf_admin:all`
+
+2. **WebSocket Events**:
+   ```typescript
+   // Client → Server
+   - join_room: Join company/customer room
+   - leave_room: Leave room
+   - typing: Typing indicator (for chat if implemented)
+
+   // Server → Client
+   - order_created: New order created
+   - order_status_updated: Order status changed
+   - ticket_validated: Ticket was validated
+   - ticket_generated: New ticket generated
+   - service_status_changed: Service availability changed
+   ```
+
+3. **Integration with Kafka**:
+   - When Kafka event published (e.g., order_status_updated)
+   - WebSocket service consumes event
+   - Broadcasts to relevant rooms
+   - All connected clients receive update
+
+4. **Connection Management**:
+   - Authenticate WebSocket connections
+   - Handle reconnections gracefully
+   - Heartbeat/ping to keep connections alive
+   - Clean up disconnected clients
+
+MOBILE APP IMPLEMENTATION:
+
+1. **WebSocket Client Setup**:
+   ```typescript
+   import io from 'socket.io-client';
+   
+   const socket = io('ws://api.fulfillmate.com', {
+     auth: { token: userToken },
+     transports: ['websocket'],
+     reconnection: true,
+     reconnectionDelay: 1000,
+   });
+   ```
+
+2. **Join Rooms**:
+   ```typescript
+   // Merchant Admin
+   socket.emit('join_room', `company:${companyId}`);
+   
+   // Customer
+   socket.emit('join_room', `customer:${customerEmail}`);
+   ```
+
+3. **Listen for Events**:
+   ```typescript
+   socket.on('order_status_updated', (data) => {
+     // Update local state
+     // Refresh order list
+     // Show notification
+   });
+   ```
+
+4. **Fallback to Polling**:
+   - If WebSocket unavailable, use polling
+   - Poll every 5-10 seconds
+   - Check for updates since last poll
+
+================================================================================
+API ENDPOINTS REFERENCE
+================================================================================
+
+See API_DOCUMENTATION.md for complete endpoint details.
+
+Key Endpoints for Mobile:
+- POST /company/company-admin/login - Merchant admin login
+- GET /orders - List orders (auto-filtered by company for merchants)
+- POST /orders/customer - Get customer orders by email
+- PATCH /orders/:orderId/status - Update order status
+- POST /ticket/validate - Validate ticket (QR scan)
+- GET /ticket/tickets/:ticketId - Get ticket details
+- PATCH /company/service-status - Toggle service availability
+
+================================================================================
+QUESTIONS TO CLARIFY WITH BACKEND TEAM
+================================================================================
+
+1. Is WebSocket support implemented? If not, when will it be available?
+2. Are push notification endpoints ready? (Device token registration)
+3. What's the recommended polling interval if WebSocket unavailable?
+4. Are there rate limits for mobile app API calls?
+5. Can we implement email verification for customer app security?
+6. Are there analytics endpoints for dashboard stats?
+7. What's the maximum file size for attachments (if implemented)?
+8. Are there any mobile-specific optimizations in the API?
+
+================================================================================
+ADDITIONAL RESOURCES
+================================================================================
+
+API Documentation: See API_DOCUMENTATION.md
+Postman Collections: 
+  - FulfillMate_Full_Postman_Collection.json
+  - FulfillMate_Merchant_Only_Postman_Collection.json
+
+Backend Codebase Files to Reference:
+- services/order-service/src/routes/orderRoutes.ts - Order endpoints
+- services/ticket-service/src/routes/ticketRoutes.ts - Ticket endpoints
+- services/company-service/src/routes/companyRoute.ts - Company endpoints
+- api-gateway/src/index.ts - Gateway routing
+
+================================================================================
+END OF PROMPT
+================================================================================
+

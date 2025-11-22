@@ -95,6 +95,60 @@ export const dispatchNotification = async (input: NotificationInput) => {
   }
 };
 
+/**
+ * Handles order creation events and sends order confirmation emails to customers.
+ * Includes delivery time information based on company settings.
+ * 
+ * @param {any} event - Order created event data
+ */
+export const handleOrderCreated = async (event: any) => {
+  if (!event?.customerInfo?.customerEmail) return;
+
+  // Calculate expected ready time based on delivery time
+  const deliveryTimeHours = event.deliveryTimeHours || 2; // Default 2 hours
+  const orderCreatedAt = new Date(event.createdAt || Date.now());
+  const expectedReadyAt = new Date(orderCreatedAt.getTime() + deliveryTimeHours * 60 * 60 * 1000);
+  
+  const formatTime = (date: Date) => {
+    return date.toLocaleString('en-US', { 
+      weekday: 'short',
+      month: 'short', 
+      day: 'numeric',
+      hour: 'numeric', 
+      minute: '2-digit',
+      hour12: true 
+    });
+  };
+
+  const rows = [
+    { label: 'Order Number', value: event.orderNumber || event.orderId || '—' },
+    { label: 'Merchant', value: event.companyName || '—' },
+    { label: 'Total Amount', value: `${event.currency || 'NGN'} ${event.totalAmount?.toLocaleString() || '0'}` },
+    { label: 'Order Placed', value: formatTime(orderCreatedAt) },
+    { label: 'Expected Ready', value: formatTime(expectedReadyAt) },
+    { label: 'Delivery Time', value: `${deliveryTimeHours} ${deliveryTimeHours === 1 ? 'hour' : 'hours'}` },
+  ];
+
+  await dispatchNotification({
+    category: 'order-confirmation',
+    trigger: 'kafka:order_created',
+    to: event.customerInfo.customerEmail,
+    subject: `Order Confirmation: ${event.orderNumber || event.orderId}`,
+    preheader: 'Your order has been received',
+    intro: `Hi ${event.customerInfo.customerName || 'there'},`,
+    html: `
+      <p>Thank you for your order! We've received it and will start processing it right away.</p>
+      ${buildDetailsTable(rows)}
+      <p style="margin-top:24px;padding:16px;background-color:#F0F9FF;border-radius:8px;border-left:4px solid #3B82F6;">
+        <strong>📦 Expected Ready Time:</strong> Your order will be ready for pickup in approximately <strong>${deliveryTimeHours} ${deliveryTimeHours === 1 ? 'hour' : 'hours'}</strong> (by ${formatTime(expectedReadyAt)}).
+      </p>
+      <p style="margin-top:24px;">You'll receive another email when your order is ready for pickup.</p>
+      <p style="margin-top:16px;">Thank you for shopping with FulfillMate.</p>
+    `,
+    meta: event,
+  });
+};
+
 export const handleOrderStatusUpdated = async (event: any) => {
   if (!event?.customerInfo?.customerEmail) return;
 
@@ -116,7 +170,7 @@ export const handleOrderStatusUpdated = async (event: any) => {
     html: `
       <p>Your order has been updated. Here are the latest details:</p>
       ${buildDetailsTable(rows)}
-      <p style="margin-top:24px;">Thank you for shopping with Connect Fulfillment.</p>
+      <p style="margin-top:24px;">Thank you for shopping with FulfillMate.</p>
     `,
     meta: event,
   });
@@ -391,6 +445,109 @@ export const handleOrderSoftDeleted = async (event: any) => {
       subject: `Order ${event.orderNumber || event.orderId} was marked as deleted`,
       preheader: 'Order deleted',
       html: `<p>An order from your company has been marked as deleted.</p>${buildDetailsTable(rows)}`,
+      meta: event,
+    });
+  }
+};
+
+/**
+ * Handles support ticket creation events.
+ * Sends notification emails to relevant parties when a support ticket is created.
+ * 
+ * @param {any} event - Support ticket created event data
+ */
+export const handleSupportTicketCreated = async (event: any) => {
+  if (!event?.ticketNumber) return;
+
+  const ticketDisplayName = event.customName || event.ticketNumber;
+  const rows = [
+    { label: 'Ticket Number', value: event.ticketNumber },
+    { label: 'Ticket Name', value: ticketDisplayName },
+    { label: 'Company', value: event.companyName || '—' },
+    { label: 'Category', value: event.category || 'General' },
+    { label: 'Priority', value: sentenceCase(event.priority || 'medium') },
+    { label: 'Created By', value: event.createdBy?.userName || event.createdBy?.userEmail },
+  ];
+
+  const html = `
+    <p>A new support ticket has been created:</p>
+    ${buildDetailsTable(rows)}
+    <p style="margin-top:24px;">You can view and respond to this ticket in your dashboard.</p>
+  `;
+
+  // Notify merchant (if ticket created by CF admin)
+  if (event.createdBy?.type === 'cf_admin' && event.companyAdminEmail) {
+    await dispatchNotification({
+      category: 'support-ticket-created',
+      trigger: 'kafka:support_ticket_created',
+      to: event.companyAdminEmail,
+      subject: `New Support Ticket: ${ticketDisplayName}`,
+      preheader: 'A support ticket has been created for your company',
+      html: `<p>Hi,</p>${html}`,
+      meta: event,
+    });
+  }
+};
+
+/**
+ * Handles message creation events in support tickets.
+ * Sends notification emails when new messages are sent in tickets.
+ * 
+ * @param {any} event - Message created event data
+ */
+export const handleMessageCreated = async (event: any) => {
+  if (!event?.ticketNumber || !event?.senderEmail) return;
+
+  // For now, skip email notifications - dashboard will show real-time updates via WebSocket
+  // In production, you could send email notifications for unread messages after a delay
+  console.log(`📧 New message in ticket ${event.ticketNumber} from ${event.senderType} - Recipients will be notified via dashboard`);
+};
+
+/**
+ * Handles support ticket status update events.
+ * Sends notification emails when ticket status changes.
+ * 
+ * @param {any} event - Ticket status updated event data
+ */
+export const handleSupportTicketStatusUpdated = async (event: any) => {
+  if (!event?.ticketNumber) return;
+
+  const ticketDisplayName = event.customName || event.ticketNumber;
+  const statusMessages: Record<string, string> = {
+    assigned: 'has been assigned to a support agent',
+    in_progress: 'is now being worked on',
+    resolved: 'has been resolved',
+    closed: 'has been closed',
+  };
+
+  const statusMessage = statusMessages[event.newStatus] || 'status has been updated';
+  const rows = [
+    { label: 'Ticket Number', value: event.ticketNumber },
+    { label: 'Ticket Name', value: ticketDisplayName },
+    { label: 'Company', value: event.companyName || '—' },
+    { label: 'Previous Status', value: sentenceCase(event.oldStatus) },
+    { label: 'New Status', value: sentenceCase(event.newStatus) },
+    { label: 'Updated By', value: event.updatedBy?.userName || event.updatedBy?.userEmail },
+  ];
+
+  if (event.assignedTo) {
+    rows.push({ label: 'Assigned To', value: event.assignedTo.cfAdminName || event.assignedTo.cfAdminEmail });
+  }
+
+  const html = `
+    <p>Support ticket <strong>${ticketDisplayName}</strong> ${statusMessage}.</p>
+    ${buildDetailsTable(rows)}
+  `;
+
+  // Notify assigned CF admin when merchant updates status
+  if (event.updatedBy?.type === 'merchant' && event.assignedTo?.cfAdminEmail) {
+    await dispatchNotification({
+      category: 'support-ticket-status-updated',
+      trigger: 'kafka:support_ticket_status_updated',
+      to: event.assignedTo.cfAdminEmail,
+      subject: `Ticket ${ticketDisplayName} status updated`,
+      preheader: `Ticket ${statusMessage}`,
+      html,
       meta: event,
     });
   }

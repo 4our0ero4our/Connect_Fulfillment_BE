@@ -174,6 +174,32 @@ const notificationProxy: RequestHandler = createProxyMiddleware({
   changeOrigin: true,
   pathRewrite: { '^/notify': '' }
 });
+const messagingProxy: RequestHandler = createProxyMiddleware({ 
+  target: process.env.MESSAGING_SERVICE_URL as string || 'http://messaging-service:4006', 
+  changeOrigin: true,
+  pathRewrite: { '^/messaging': '' },
+  onProxyReq: (proxyReq, req: any, res) => {
+    console.log(`[API Gateway] Proxying ${req.method} ${req.url} to messaging-service`);
+    // Forward authorization header
+    if (req.headers['authorization']) {
+      proxyReq.setHeader('authorization', req.headers['authorization']);
+    }
+    // Forward company API key if present
+    if (req.headers['your_company_api_key']) {
+      proxyReq.setHeader('your_company_api_key', req.headers['your_company_api_key']);
+    }
+    // If body was parsed, re-stream it
+    if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE')) {
+      const bodyData = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      if (!proxyReq.getHeader('Content-Type')) {
+        proxyReq.setHeader('Content-Type', 'application/json');
+      }
+      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+      proxyReq.write(bodyData);
+      proxyReq.end();
+    }
+  },
+});
 
 // ✅ Working perfectly
 // Root endpoint (to confirm API key is valid)
@@ -181,7 +207,7 @@ app.get('/', checkInvalidApiKeyBan( 'api-gateway' ), validateApiKey, (_req: Requ
   res.json({ 
     message: `Hello ${res.locals.company?.companyName}. Congratulations on successfully integrating your API with the Connect Fulfillment API Gateway. Seeing this message means your API KEY is valid and the API Gateway is working correctly.`,
     companyDetails: res.locals.company ? res.locals.company : 'No company details found',
-    services: [{ name: 'auth', url: '/auth', description: 'Authentication Service' }, { name: 'order', url: '/order', description: 'Order Service' }, { name: 'ticket', url: '/ticket', description: 'Ticket Service' }, { name: 'company', url: '/company', description: 'Company Service' }, { name: 'notify', url: '/notify', description: 'Notification Service' }],
+    services: [{ name: 'auth', url: '/auth', description: 'Authentication Service' }, { name: 'order', url: '/order', description: 'Order Service' }, { name: 'ticket', url: '/ticket', description: 'Ticket Service' }, { name: 'company', url: '/company', description: 'Company Service' }, { name: 'notify', url: '/notify', description: 'Notification Service' }, { name: 'messaging', url: '/messaging', description: 'Messaging/Support Service' }],
     health: '/health',
     timestamp: new Date().toISOString(),
     service: 'api-gateway',
@@ -213,12 +239,19 @@ app.get('/company/verify-key', companyProxy);
 app.get('/company/companies', companyProxy);
 app.post('/company/add-admin-email-to-company', companyProxy);
 
+// Messaging/Support routes (protected by JWT tokens in service, no API key required for CF Admin)
+// Company Admin routes require company API key or JWT token
+app.get('/messaging/tickets/log', messagingProxy); // CF Admin only - ticket log
+app.use('/messaging', checkInvalidApiKeyBan('messaging'), detectAnomalies, validateApiKey, messagingProxy);
+
 // Services routes that are protected by validateApiKey middleware (API key validation)
 // Anomaly detection runs before validation to detect suspicious patterns without blocking normal high-volume usage
 // Route /orders (plural) for getting/managing orders - must come AFTER customer route to avoid conflicts
 app.use('/orders', checkInvalidApiKeyBan( 'order' ), detectAnomalies, validateApiKey, ordersProxy);
 // Route /order (singular) for creating orders
 app.use('/order', checkInvalidApiKeyBan( 'order' ), detectAnomalies, validateApiKey, orderProxy);
+// Route /logs for audit logs - accessible via order service
+app.use('/logs', checkInvalidApiKeyBan( 'order' ), detectAnomalies, validateApiKey, ordersProxy);
 app.use('/ticket', checkInvalidApiKeyBan( 'ticket' ), detectAnomalies, validateApiKey, ticketProxy);
 // Protected company routes (API key required) - must come AFTER public routes to avoid conflicts
 app.use('/company', checkInvalidApiKeyBan( 'company' ), detectAnomalies, validateApiKey, companyProxy);

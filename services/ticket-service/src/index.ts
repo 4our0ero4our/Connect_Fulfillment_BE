@@ -14,19 +14,41 @@ app.use(express.json({ limit: '5mb' }));
 
 const mongoURI = process.env.MONGO_URI || 'mongodb://localhost:27017/TicketDB';
 let mongoConnected = false;
+let isConnecting = false;
 
 const connectMongo = async () => {
+  // Prevent multiple simultaneous connection attempts
+  if (isConnecting || mongoose.connection.readyState === 1) {
+    return;
+  }
+
+  isConnecting = true;
   try {
     await mongoose.connect(mongoURI, {
       serverSelectionTimeoutMS: 10000,
       socketTimeoutMS: 45000,
+      maxPoolSize: 10,
+      minPoolSize: 2,
+      maxIdleTimeMS: 30000,
+      retryWrites: true,
+      retryReads: true
     });
     mongoConnected = true;
+    isConnecting = false;
     console.log('✅ Connected to MongoDB (ticket-service)');
   } catch (error) {
     mongoConnected = false;
+    isConnecting = false;
     console.error('Mongo connection failed:', (error as any)?.message);
-    setTimeout(connectMongo, 5000);
+    
+    // Only retry if not already connected and not currently connecting
+    if (mongoose.connection.readyState === 0) {
+      setTimeout(() => {
+        if (mongoose.connection.readyState === 0) {
+          connectMongo();
+        }
+      }, 5000);
+    }
   }
 };
 
@@ -59,10 +81,25 @@ startOrderStatusConsumer(async (event) => {
   console.error('Kafka consumer failed to start for ticket-service:', error.message);
 });
 
+mongoose.connection.on('error', (err) => {
+  console.error('MongoDB connection error:', err);
+  mongoConnected = false;
+});
+
 mongoose.connection.on('disconnected', () => {
   mongoConnected = false;
-  console.warn('MongoDB disconnected. Retrying...');
-  connectMongo();
+  console.warn('MongoDB disconnected. Mongoose will attempt to reconnect automatically...');
+  // Don't manually reconnect - let Mongoose handle it with its built-in reconnection
+});
+
+mongoose.connection.on('reconnected', () => {
+  console.log('✅ MongoDB reconnected successfully (ticket-service)');
+  mongoConnected = true;
+});
+
+mongoose.connection.on('connected', () => {
+  console.log('✅ MongoDB connected (ticket-service)');
+  mongoConnected = true;
 });
 
 app.use((req: Request, res: Response, next: NextFunction) => {

@@ -16,6 +16,8 @@ export interface ICompany extends Document {
   apiKeyActive: boolean;
   isVerified: boolean;
   isActive: boolean;
+  isServiceActive: boolean; // Whether the company is currently accepting orders (can be toggled by company admin)
+  deliveryTimeHours: number; // Number of hours after order placement when order will be ready (e.g., 2 for "ready in 2 hours")
   companyAdminEmails: string[];
   companyAdminIDDetails: { companyAdminName: string, companyAdminEmail: string, companyAdminPassword: string }[];
   orderDeletionSettings?: {
@@ -45,6 +47,8 @@ const CompanySchema: Schema = new Schema<ICompany>(
     // A Connect Fulfillment admin will verify the company after they register themselves then change their status to true.
     isVerified: { type: Boolean, default: false, required: true },
     isActive: { type: Boolean, default: true },
+    isServiceActive: { type: Boolean, default: true }, // Company can toggle this to stop receiving orders (e.g., when closing store)
+    deliveryTimeHours: { type: Number, default: 2, min: [0.5, 'Delivery time must be at least 0.5 hours'], max: [168, 'Delivery time cannot exceed 168 hours (7 days)'] }, // Default 2 hours, min 0.5 hours (30 mins), max 7 days
     companyAdminEmails: { type: [String], default: [], required: true},
     companyAdminIDDetails: { type: [{ companyAdminName: String, companyAdminEmail: String, companyAdminPassword: String }], default: [], required: true},
     orderDeletionSettings: {

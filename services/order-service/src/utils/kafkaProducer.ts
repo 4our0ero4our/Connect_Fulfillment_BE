@@ -231,6 +231,7 @@ export const publishOrderCreated = async (orderData: {
   totalAmount: number;
   status: string;
   createdAt: Date;
+  deliveryTimeHours?: number; // Number of hours until order is ready
 }) => {
   try {
     await sendWithRetry(

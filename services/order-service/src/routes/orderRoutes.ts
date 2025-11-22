@@ -5,6 +5,7 @@ import { verifyMerchant, verifyCFAdmin, verifyAdminOrMerchant, verifyOrderAccess
 import { verifyCompanyApiKey } from '../middleware/verifyCompanyApiKey';
 import { verifyCompanyAdmin } from '../middleware/verifyCompanyAdmin';
 import { publishOrderCreated, publishOrderStatusUpdated, publishOrderDeleted, publishOrderSoftDeleted, publishTicketAttached } from '../utils/kafkaProducer';
+import { createAuditLog, extractUserInfo } from '../utils/auditLogger';
 
 const router = Router();
 
@@ -54,6 +55,18 @@ router.post('/', verifyCompanyApiKey, verifyMerchant, async (req: Request, res: 
     const companyId = res.locals.companyId;
     const companyApiKey = res.locals.companyApiKey;
     const companyName = res.locals.companyName;
+    const companyEmail = res.locals.companyEmail;
+    const company = res.locals.company;
+
+    // Check if company service is active
+    if (company && company.isServiceActive === false) {
+      return res.status(503).json({
+        message: 'Service unavailable',
+        error: 'This merchant is currently not accepting orders. Please try again later.',
+        serviceStatus: 'inactive',
+        companyName: companyName
+      });
+    }
 
     // Validation checks
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -153,6 +166,26 @@ router.post('/', verifyCompanyApiKey, verifyMerchant, async (req: Request, res: 
       status: order.status,
       createdAt: order.createdAt,
     });
+
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'order_created',
+      ...userInfo,
+      targetCompany: companyId,
+      targetCompanyName: companyName,
+      targetOrder: order._id.toString(),
+      targetOrderNumber: order.orderNumber,
+      details: {
+        customerEmail: order.customerInfo.customerEmail,
+        customerName: order.customerInfo.customerName,
+        totalAmount: order.totalAmount,
+        currency: order.currency,
+        itemCount: order.items.length,
+        status: order.status,
+      },
+      service: 'order-service',
+    }, req);
 
     // Return order without sensitive data
     const orderResponse = order.toObject();
@@ -497,6 +530,24 @@ router.delete('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, asyn
       ? { type: 'company_admin' as const, email: res.locals.companyAdminEmail, id: res.locals.companyAdminId }
       : { type: 'merchant' as const };
 
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'order_soft_deleted',
+      ...userInfo,
+      targetCompany: order.companyId,
+      targetCompanyName: order.companyName,
+      targetOrder: order._id.toString(),
+      targetOrderNumber: order.orderNumber,
+      details: {
+        oldStatus: oldStatus,
+        newStatus: 'deleted',
+        customerEmail: order.customerInfo.customerEmail,
+        deletedByType: deletedBy.type,
+      },
+      service: 'order-service',
+    }, req);
+
     // Publish order_soft_deleted event to Kafka (soft delete - order still visible with "deleted" status)
     await publishOrderSoftDeleted({
       orderId: order._id.toString(),
@@ -699,6 +750,24 @@ router.patch('/orders/:orderId/ticket/replace', verifyCFAdmin, async (req: Reque
     // Update order with new ticketId
     order.ticketId = ticketId;
     await order.save();
+
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'ticket_replaced',
+      ...userInfo,
+      targetCompany: order.companyId,
+      targetCompanyName: order.companyName,
+      targetOrder: order._id.toString(),
+      targetOrderNumber: order.orderNumber,
+      targetTicket: ticketId,
+      details: {
+        oldTicketId: oldTicketId,
+        newTicketId: ticketId,
+        reason: 'CF Admin replacement',
+      },
+      service: 'order-service',
+    }, req);
 
     // Publish ticket_attached_to_order event to Kafka with isReplacement=true
     // Notification Service consumes this to send updated ticket emails to customers
@@ -992,6 +1061,27 @@ router.delete('/orders/:orderId/hard-delete', verifyLeadCFAdmin, async (req: Req
 
 		// Remove from orders collection
 		await Order.findByIdAndDelete(orderId);
+
+		// Create audit log
+		const userInfo = extractUserInfo(res.locals);
+		await createAuditLog({
+			action: 'order_hard_deleted',
+			...userInfo,
+			targetCompany: order.companyId,
+			targetCompanyName: order.companyName,
+			targetOrder: order._id.toString(),
+			targetOrderNumber: order.orderNumber,
+			details: {
+				orderId: order._id.toString(),
+				orderNumber: order.orderNumber,
+				statusBeforeDelete: order.status,
+				customerEmail: order.customerInfo.customerEmail,
+				totalAmount: order.totalAmount,
+				currency: order.currency,
+				movedToDeletedOrders: true,
+			},
+			service: 'order-service',
+		}, req);
 
 		return res.status(200).json({
 			message: 'Order hard-deleted successfully',
