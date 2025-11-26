@@ -33,7 +33,10 @@ const ensureConnected = async () => {
 
 const sendEvent = async (topic: string, payload: Record<string, unknown>) => {
   const connected = await ensureConnected();
-  if (!connected) return;
+  if (!connected) {
+    console.error(`⚠️ Kafka not connected, cannot publish ${topic} event`);
+    return;
+  }
   try {
     await producer.send({
       topic,
@@ -48,8 +51,10 @@ const sendEvent = async (topic: string, payload: Record<string, unknown>) => {
         },
       ],
     });
+    console.log(`✅ Published ${topic} event successfully`);
   } catch (error) {
-    console.error(`Failed to publish ${topic} event:`, (error as any)?.message || error);
+    console.error(`❌ Failed to publish ${topic} event:`, (error as any)?.message || error);
+    throw error; // Re-throw to allow caller to handle
   }
 };
 
@@ -77,6 +82,15 @@ export const publishCompanyStatusChanged = async (payload: {
   reason?: string;
   changedBy?: string;
 }) => sendEvent('company_status_changed', payload);
+
+export const publishMerchantAdminRegistered = async (payload: {
+  companyId: string;
+  companyName: string;
+  companyEmail: string;
+  adminEmail: string;
+  adminName: string;
+  loginUrl?: string;
+}) => sendEvent('merchant_admin_registered', payload);
 
 export const publishCompanyAdminRemoved = async (payload: {
   companyId: string;

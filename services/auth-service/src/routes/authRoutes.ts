@@ -1,6 +1,5 @@
 // The routes in here are for the auth service to register (/register), login (/login), logout (/logout), change password (/change-password)
-import { Router } from 'express';
-import { Request, Response } from 'express';
+import { Router, Request, Response, CookieOptions } from 'express';
 import { Admin } from '../models/Admin';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
@@ -12,6 +11,8 @@ import { verifyLeadCFAdmin } from '../middleware/verifyLeadCFAdmin';
 import { preserveRequestBody } from '../middleware/preserveRequestBody';
 import { Staff } from '../models/Staff';
 import { createAuditLog, extractUserInfo } from '../utils/auditLogger';
+import { AdminSession } from '../models/AdminSession';
+import crypto from 'crypto';
 
 const router = Router();
 // Try multiple paths for .env file (works in both local and Docker)
@@ -82,6 +83,53 @@ const isValidLeadCFAdmin = async (email: string): Promise<boolean> => {
   const staff = await staffsCollection.findOne({ email: email, isALeadCFAdmin: true });
   return staff ? true : false;
 };
+
+const toPositiveNumber = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const CF_ACCESS_COOKIE_NAME = process.env.CF_ADMIN_ACCESS_COOKIE_NAME || 'cf_access';
+const CF_REFRESH_COOKIE_NAME = process.env.CF_ADMIN_REFRESH_COOKIE_NAME || 'cf_refresh';
+const CF_ACCESS_TOKEN_TTL_MINUTES = toPositiveNumber(process.env.CF_ADMIN_ACCESS_TOKEN_MINUTES, 60);
+const CF_REFRESH_TOKEN_TTL_DAYS = toPositiveNumber(process.env.CF_ADMIN_REFRESH_TOKEN_DAYS, 7);
+const CF_ACCESS_TOKEN_TTL_MS = CF_ACCESS_TOKEN_TTL_MINUTES * 60 * 1000;
+const CF_REFRESH_TOKEN_TTL_MS = CF_REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000;
+const CF_ACCESS_TOKEN_EXPIRES_IN_SECONDS = CF_ACCESS_TOKEN_TTL_MINUTES * 60;
+
+const cfCookieBaseOptions: CookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'strict',
+  domain: process.env.CF_ADMIN_COOKIE_DOMAIN || undefined,
+  path: '/',
+};
+
+const createRefreshToken = () => crypto.randomBytes(64).toString('hex');
+const hashRefreshToken = (token: string) => crypto.createHash('sha256').update(token).digest('hex');
+
+const setCFAdminCookies = (res: Response, accessToken: string, refreshToken: string) => {
+  res.cookie(CF_ACCESS_COOKIE_NAME, accessToken, {
+    ...cfCookieBaseOptions,
+    maxAge: CF_ACCESS_TOKEN_TTL_MS,
+  });
+  res.cookie(CF_REFRESH_COOKIE_NAME, refreshToken, {
+    ...cfCookieBaseOptions,
+    maxAge: CF_REFRESH_TOKEN_TTL_MS,
+  });
+};
+
+const clearCFAdminCookies = (res: Response) => {
+  const clearOptions: CookieOptions = { ...cfCookieBaseOptions, maxAge: 0 };
+  res.clearCookie(CF_ACCESS_COOKIE_NAME, clearOptions);
+  res.clearCookie(CF_REFRESH_COOKIE_NAME, clearOptions);
+};
+
+const rawCfJwtSecret = process.env.JWT_SECRET;
+if (!rawCfJwtSecret) {
+  throw new Error('JWT_SECRET environment variable is required for auth-service to issue CF admin tokens.');
+}
+const CF_JWT_SECRET: string = rawCfJwtSecret;
 
 /**
  * Health check endpoint for the Auth Service.
@@ -203,9 +251,22 @@ router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res:
         adminEmail: admin.adminEmail,
         adminName: admin.adminName
       } as JwtPayload,
-      process.env.JWT_SECRET!,
-      { expiresIn: '24h' }
+      CF_JWT_SECRET,
+      { expiresIn: CF_ACCESS_TOKEN_EXPIRES_IN_SECONDS }
     );
+
+    const refreshToken = createRefreshToken();
+    await AdminSession.create({
+      adminId: admin._id.toString(),
+      adminEmail: admin.adminEmail,
+      adminName: admin.adminName,
+      refreshTokenHash: hashRefreshToken(refreshToken),
+      expiresAt: new Date(Date.now() + CF_REFRESH_TOKEN_TTL_MS),
+      userAgent: req.headers['user-agent'],
+      ipAddress: req.ip,
+    });
+
+    setCFAdminCookies(res, token, refreshToken);
 
     const processingTime = Date.now() - startTime;
     console.log('✅ Registration successful:', {
@@ -344,9 +405,22 @@ router.post('/login', rateLimit(5, 60, 'login'), async (req: Request, res: Respo
         adminEmail: admin.adminEmail,
         adminName: admin.adminName
       } as JwtPayload,
-      process.env.JWT_SECRET!,
-      { expiresIn: '24h' }
+      CF_JWT_SECRET,
+      { expiresIn: CF_ACCESS_TOKEN_EXPIRES_IN_SECONDS }
     );
+
+    const refreshToken = createRefreshToken();
+    await AdminSession.create({
+      adminId: admin._id.toString(),
+      adminEmail: admin.adminEmail,
+      adminName: admin.adminName,
+      refreshTokenHash: hashRefreshToken(refreshToken),
+      expiresAt: new Date(Date.now() + CF_REFRESH_TOKEN_TTL_MS),
+      userAgent: req.headers['user-agent'],
+      ipAddress: req.ip,
+    });
+
+    setCFAdminCookies(res, token, refreshToken);
 
     res.status(200).json({
       message: 'Login successful',
@@ -364,6 +438,74 @@ router.post('/login', rateLimit(5, 60, 'login'), async (req: Request, res: Respo
       message: 'Internal server error',
       error: error?.message || 'An unknown error occurred'
     });
+  }
+});
+
+router.post('/refresh-token', async (req: Request, res: Response) => {
+  try {
+    const incomingRefreshToken = req.cookies?.[CF_REFRESH_COOKIE_NAME] || req.body?.refreshToken;
+    if (!incomingRefreshToken) {
+      return res.status(401).json({ message: 'Refresh token missing' });
+    }
+
+    const hashedToken = hashRefreshToken(incomingRefreshToken);
+    const session = await AdminSession.findOne({ refreshTokenHash: hashedToken });
+
+    if (!session) {
+      clearCFAdminCookies(res);
+      return res.status(401).json({ message: 'Invalid refresh token' });
+    }
+
+    if (session.expiresAt.getTime() < Date.now()) {
+      await session.deleteOne();
+      clearCFAdminCookies(res);
+      return res.status(401).json({ message: 'Refresh token expired' });
+    }
+
+    const admin = await Admin.findById(session.adminId);
+    if (!admin) {
+      await session.deleteOne();
+      clearCFAdminCookies(res);
+      return res.status(401).json({ message: 'Admin not found' });
+    }
+
+    const token = jwt.sign(
+      {
+        adminId: admin._id,
+        adminEmail: admin.adminEmail,
+        adminName: admin.adminName
+      } as JwtPayload,
+      CF_JWT_SECRET,
+      { expiresIn: CF_ACCESS_TOKEN_EXPIRES_IN_SECONDS }
+    );
+
+    const newRefreshToken = createRefreshToken();
+    session.refreshTokenHash = hashRefreshToken(newRefreshToken);
+    session.expiresAt = new Date(Date.now() + CF_REFRESH_TOKEN_TTL_MS);
+    session.lastUsedAt = new Date();
+    session.userAgent = req.headers['user-agent'] || session.userAgent;
+    session.ipAddress = req.ip || session.ipAddress;
+    await session.save();
+
+    setCFAdminCookies(res, token, newRefreshToken);
+
+    return res.status(200).json({
+      message: 'Tokens refreshed successfully',
+      admin: {
+        id: admin._id,
+        adminName: admin.adminName,
+        adminEmail: admin.adminEmail
+      },
+      token
+    });
+  } catch (error: any) {
+    console.error('Refresh token error:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        message: 'Internal server error',
+        error: error?.message || 'An unknown error occurred'
+      });
+    }
   }
 });
 
@@ -404,15 +546,31 @@ router.post('/login', rateLimit(5, 60, 'login'), async (req: Request, res: Respo
  * 
  * @returns {Object} 200 - Logout successful message
  */
-router.get('/logout', verifyCFAdminToken, (_req: Request, res: Response) => {
-  // Removes the JWT from the client's browser
-  res.clearCookie('token');
-  res.clearCookie('connect.sid');
-  res.clearCookie('session');
-  res.clearCookie('sessionid');
-  res.clearCookie('auth');
-  res.clearCookie('auth-token');
-  return res.status(200).json({ message: 'Logout successful' });
+const handleAdminLogout = async (req: Request, res: Response) => {
+  try {
+    const incomingRefreshToken = req.cookies?.[CF_REFRESH_COOKIE_NAME] || req.body?.refreshToken;
+    if (incomingRefreshToken) {
+      await AdminSession.deleteOne({ refreshTokenHash: hashRefreshToken(incomingRefreshToken) });
+    }
+    clearCFAdminCookies(res);
+    return res.status(200).json({ message: 'Logout successful' });
+  } catch (error: any) {
+    console.error('Logout error:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        message: 'Internal server error',
+        error: error?.message || 'An unknown error occurred'
+      });
+    }
+  }
+};
+
+router.post('/logout', async (req: Request, res: Response) => {
+  await handleAdminLogout(req, res);
+});
+
+router.get('/logout', verifyCFAdminToken, async (req: Request, res: Response) => {
+  await handleAdminLogout(req, res);
 });
 
 

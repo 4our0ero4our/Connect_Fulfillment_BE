@@ -9,11 +9,18 @@ services:
       - "2181:2181"
     networks:
       - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 2181 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   kafka:
     image: confluentinc/cp-kafka:7.4.0
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
@@ -76,9 +83,12 @@ services:
       - KAFKA_BROKERS=kafka:9092
       - JWT_SECRET=${JWT_SECRET}
     depends_on:
-      - mongodb
-      - redis
-      - kafka
+      mongodb:
+        condition: service_started
+      redis:
+        condition: service_started
+      kafka:
+        condition: service_healthy
     networks:
       - app-network
 
@@ -94,9 +104,12 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
     depends_on:
-      - mongodb
-      - kafka
-      - redis
+      mongodb:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - app-network
 
@@ -112,9 +125,12 @@ services:
       - REDIS_URL=redis://redis:6379
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
     depends_on:
-      - mongodb
-      - kafka
-      - redis
+      mongodb:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - app-network
 
@@ -132,9 +148,12 @@ services:
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
       - COMPANY_PORTAL_URL=${COMPANY_PORTAL_URL}
     depends_on:
-      - mongodb
-      - kafka
-      - redis
+      mongodb:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - app-network
 
@@ -143,6 +162,8 @@ services:
     ports:
       - "4005:4005"
     environment:
+      - MONGO_URI=${NOTIFICATION_MONGO_URI:-mongodb://mongodb:27017/NotificationDB}
+      - KAFKA_BROKERS=kafka:9092
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT}
       - SMTP_USER=${SMTP_USER}
@@ -153,6 +174,7 @@ services:
       - CF_BRAND_LOGO_URL=${CF_BRAND_LOGO_URL}
     depends_on:
       - kafka
+      - mongodb
     networks:
       - app-network
 

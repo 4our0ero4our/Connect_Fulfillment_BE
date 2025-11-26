@@ -3,6 +3,29 @@ import axios from 'axios';
 import jwt from 'jsonwebtoken';
 import { recordInvalidApiKeyAttempt } from './gatewayRateLimit';
 
+const COMPANY_ADMIN_ACCESS_COOKIE_NAME = process.env.COMPANY_ADMIN_ACCESS_COOKIE_NAME || 'ffm_access';
+const CF_ADMIN_ACCESS_COOKIE_NAME = process.env.CF_ADMIN_ACCESS_COOKIE_NAME || 'cf_access';
+type TokenSource = 'header' | 'company_cookie' | 'cf_cookie' | null;
+const getAccessTokenFromRequest = (req: Request): { token: string | null; source: TokenSource } => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return { token: authHeader.split(' ')[1], source: 'header' };
+  }
+
+  const cookieCandidates: Array<{ name: string; source: TokenSource }> = [
+    { name: COMPANY_ADMIN_ACCESS_COOKIE_NAME, source: 'company_cookie' },
+    { name: CF_ADMIN_ACCESS_COOKIE_NAME, source: 'cf_cookie' },
+  ];
+
+  for (const candidate of cookieCandidates) {
+    if (req.cookies && req.cookies[candidate.name]) {
+      return { token: req.cookies[candidate.name], source: candidate.source };
+    }
+  }
+
+  return { token: null, source: null };
+};
+
 const getCompanyServiceUrls = (): string[] => {
   const urls: string[] = [];
   if (process.env.COMPANY_SERVICE_URL) {
@@ -36,9 +59,8 @@ const fetchCompanyValidation = async (apiKey: string) => {
 export const validateApiKey = async (req: Request, res: Response, next: NextFunction) => {
   try {
     // Check if admin token is present - allow admins to bypass API key check
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
+    const { token, source } = getAccessTokenFromRequest(req);
+    if (token) {
       try {
         // Verify token
         const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
@@ -46,6 +68,9 @@ export const validateApiKey = async (req: Request, res: Response, next: NextFunc
         // Check if it's a CF Admin token - allow admins to bypass API key check
         if (decoded.adminId || decoded.adminEmail) {
           console.log('CF Admin token verified, allowing access without API key');
+          if (source !== 'header' && !req.headers.authorization) {
+            req.headers.authorization = `Bearer ${token}`;
+          }
           // Store admin info in res.locals for downstream services
           res.locals.isAdmin = true;
           res.locals.adminId = decoded.adminId;
@@ -56,11 +81,16 @@ export const validateApiKey = async (req: Request, res: Response, next: NextFunc
         
         // Check if it's a Company Admin token - extract API key from token
         if (decoded.companyAdminId !== undefined || decoded.companyAdminEmail) {
-          console.log('Company Admin token verified, extracting API key from token');
+          console.log(`Company Admin token verified from ${source === 'company_cookie' ? 'cookie' : source === 'cf_cookie' ? 'cf cookie' : 'header'}, extracting API key from token`);
           const companyApiKey = decoded.companyApiKey;
           
           if (!companyApiKey) {
             return res.status(401).json({ error: 'Company API key not found in token' });
+          }
+
+          // Ensure downstream services can still read the Authorization header even if auth came from cookies
+          if (source !== 'header' && !req.headers.authorization) {
+            req.headers.authorization = `Bearer ${token}`;
           }
           
           // Validate the API key from the token

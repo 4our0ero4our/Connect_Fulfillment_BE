@@ -3,11 +3,15 @@ import mongoose from 'mongoose';
 import companyRoute from './routes/companyRoute';
 import logRoutes from './routes/logRoutes';
 import { Request, Response, NextFunction } from 'express';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 const app = express();
+
+// Parse cookies for authentication flows
+app.use(cookieParser());
 
 // Increase timeout for requests
 app.use(express.json({ limit: '10mb' }));

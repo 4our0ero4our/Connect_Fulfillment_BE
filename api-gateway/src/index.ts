@@ -1,10 +1,14 @@
 import express, { NextFunction } from 'express';
 import { createProxyMiddleware, RequestHandler } from 'http-proxy-middleware';
 import { Request, Response } from 'express';
+import cookieParser from 'cookie-parser';
 import { validateApiKey } from './middleware/apiKeyValidator';
 import { checkInvalidApiKeyBan, detectAnomalies } from './middleware/gatewayRateLimit';
 
 const app = express();
+
+// Parse cookies for auth token extraction
+app.use(cookieParser());
 
 // Body parsing middleware (needed for DELETE requests with bodies)
 app.use(express.json({ limit: '10mb' }));
@@ -231,6 +235,8 @@ app.post('/orders/customer', ordersProxy);
 app.post('/company/register', companyProxy);
 app.post('/company/company-admin/register', companyProxy);
 app.post('/company/company-admin/login', companyProxy);
+app.post('/company/company-admin/refresh-token', companyProxy);
+app.post('/company/company-admin/logout', companyProxy);
 app.get('/company/company-admin/verify-token', companyProxy);
 app.get('/company/verify-key', companyProxy);
 

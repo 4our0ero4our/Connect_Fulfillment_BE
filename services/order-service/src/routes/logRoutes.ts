@@ -37,9 +37,22 @@ router.get('/logs', verifyAdminOrMerchant, async (req: Request, res: Response) =
     // Build query
     const query: any = {};
 
-    // Company Admin/Merchant can only see their own company's logs
+    // Company Admin/Merchant can see:
+    // 1. Logs where they performed the action (performedBy = their email)
+    // 2. Logs where their company is the target (targetCompany = their companyId)
     if (res.locals.isMerchant || res.locals.isCompanyAdmin) {
-      query.targetCompany = res.locals.companyId;
+      const companyAdminEmail = res.locals.companyAdminEmail?.toLowerCase() || res.locals.merchantEmail?.toLowerCase();
+      const companyId = res.locals.companyId;
+
+      if (companyAdminEmail && companyId) {
+        query.$or = [
+          { performedBy: companyAdminEmail },
+          { targetCompany: companyId }
+        ];
+      } else if (companyId) {
+        // Fallback to company-only if email not available
+        query.targetCompany = companyId;
+      }
     }
     // CF Admin can see all logs (no companyId filter unless specified)
 
@@ -55,7 +68,27 @@ router.get('/logs', verifyAdminOrMerchant, async (req: Request, res: Response) =
 
     // Filter by performer
     if (req.query.performedBy) {
-      query.performedBy = (req.query.performedBy as string).toLowerCase();
+      const requestedEmail = (req.query.performedBy as string).toLowerCase();
+      
+      // Company Admin can only filter by their own email
+      if (res.locals.isMerchant || res.locals.isCompanyAdmin) {
+        const companyAdminEmail = res.locals.companyAdminEmail?.toLowerCase() || res.locals.merchantEmail?.toLowerCase();
+        if (requestedEmail !== companyAdminEmail) {
+          return res.status(403).json({
+            message: 'Access denied',
+            error: 'You can only view audit logs for your own actions or your company'
+          });
+        }
+        // Override $or with just performedBy filter
+        query.$or = [{ performedBy: companyAdminEmail }];
+      } else if (res.locals.isAdmin || res.locals.isCFAdmin) {
+        // CF Admin can filter by any email
+        query.performedBy = requestedEmail;
+        // Remove $or if it exists
+        if (query.$or) {
+          delete query.$or;
+        }
+      }
     }
 
     // Filter by service

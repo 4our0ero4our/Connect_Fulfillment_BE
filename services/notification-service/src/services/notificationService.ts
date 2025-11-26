@@ -269,23 +269,63 @@ export const handleAdminPasswordChanged = async (event: any) => {
 };
 
 export const handleAdminAdded = async (event: any) => {
-  if (!event?.email) return;
+  // Support both 'email' and 'adminEmail' field names for backward compatibility
+  const adminEmail = event?.email || event?.adminEmail;
+  if (!adminEmail) return;
 
   const inviteLink = event.inviteUrl || process.env.COMPANY_PORTAL_URL || '#';
+  const adminName = event?.name || event?.adminName || '';
 
   await dispatchNotification({
     category: 'admin-invite',
     trigger: event.trigger || 'kafka:admin_added',
-    to: event.email,
+    to: adminEmail,
     subject: 'You have been added as an admin',
     preheader: 'Complete your setup',
-    intro: `Hello ${event.name || ''},`,
+    intro: `Hello ${adminName},`,
     html: `
-      <p>You have been added as an admin for ${event.companyName || 'Connect Fulfillment'}.</p>
+      <p>You have been added as an admin for <strong>${event.companyName || 'Connect Fulfillment'}</strong>.</p>
+      <p>Please complete your registration to access the dashboard.</p>
     `,
     cta: { label: 'Finish setup', url: inviteLink },
     meta: event,
   });
+};
+
+export const handleMerchantAdminRegistered = async (event: any) => {
+  console.log('📧 handleMerchantAdminRegistered called with event:', JSON.stringify(event, null, 2));
+  
+  const adminEmail = event?.adminEmail;
+  if (!adminEmail) {
+    console.warn('⚠️ handleMerchantAdminRegistered: No adminEmail in event');
+    return;
+  }
+
+  const loginUrl = event.loginUrl || `${process.env.COMPANY_PORTAL_URL || 'https://portal.connectfulfillment.com'}/login`;
+  const adminName = event?.adminName || '';
+
+  console.log(`📧 Sending welcome email to ${adminEmail} for company ${event.companyName || 'Unknown'}`);
+
+  try {
+    await dispatchNotification({
+      category: 'merchant-admin-registration',
+      trigger: event.trigger || 'kafka:merchant_admin_registered',
+      to: adminEmail,
+      subject: 'Welcome! Your admin account has been created',
+      preheader: 'You can now log in to manage your company',
+      intro: `Hello ${adminName},`,
+      html: `
+        <p>Your admin account has been successfully created for <strong>${event.companyName || 'Connect Fulfillment'}</strong>.</p>
+        <p>You can now log in to the dashboard using your email and password to manage your company's orders and settings.</p>
+      `,
+      cta: { label: 'Go to Dashboard', url: loginUrl },
+      meta: event,
+    });
+    console.log(`✅ Welcome email sent successfully to ${adminEmail}`);
+  } catch (error: any) {
+    console.error(`❌ Failed to send welcome email to ${adminEmail}:`, error?.message || error);
+    throw error;
+  }
 };
 
 export const handleOrderDeleted = async (event: any) => {

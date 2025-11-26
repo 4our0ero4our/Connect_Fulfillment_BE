@@ -6,6 +6,7 @@ import {
   handleTicketValidated,
   handleAdminPasswordChanged,
   handleAdminAdded,
+  handleMerchantAdminRegistered,
   handleOrderDeleted,
   handleCompanyVerified,
   handleCompanyApiKeyStatusChanged,
@@ -41,6 +42,7 @@ const topicHandlers: Record<string, (payload: any) => Promise<void>> = {
   admin_password_changed: handleAdminPasswordChanged,
   admin_added_to_company: handleAdminAdded,
   cf_admin_added: handleAdminAdded,
+  merchant_admin_registered: handleMerchantAdminRegistered,
   order_deleted: handleOrderDeleted,
   company_verified: handleCompanyVerified,
   company_api_key_status_changed: handleCompanyApiKeyStatusChanged,
@@ -53,33 +55,78 @@ const topicHandlers: Record<string, (payload: any) => Promise<void>> = {
 };
 
 export const startNotificationConsumers = async () => {
-  if (consumerConnected) return;
-
-  await consumer.connect();
-  consumerConnected = true;
-  console.log('✅ Notification service connected to Kafka');
-
-  const topics = Object.keys(topicHandlers);
-  for (const topic of topics) {
-    await consumer.subscribe({ topic, fromBeginning: false });
+  if (consumerConnected) {
+    console.log('⚠️ Kafka consumer already connected, skipping reconnection');
+    return;
   }
 
-  await consumer.run({
-    eachMessage: async ({ topic, message }: EachMessagePayload) => {
-      try {
-        const handler = topicHandlers[topic];
-        if (!handler) return;
+  let retries = 0;
+  const maxRetries = 10;
+  
+  while (retries < maxRetries) {
+    try {
+      console.log(`🔄 Attempting to connect to Kafka (attempt ${retries + 1}/${maxRetries})...`);
+      await consumer.connect();
+      consumerConnected = true;
+      console.log('✅ Notification service connected to Kafka');
 
-        const payload = message.value?.toString();
-        if (!payload) return;
-
-        const data = JSON.parse(payload);
-        await handler(data);
-      } catch (error) {
-        console.error(`Failed to process ${topic} message:`, (error as any)?.message);
+      const topics = Object.keys(topicHandlers);
+      console.log(`📋 Subscribing to ${topics.length} topics:`, topics.join(', '));
+      
+      for (const topic of topics) {
+        try {
+          await consumer.subscribe({ topic, fromBeginning: false });
+          console.log(`✅ Subscribed to topic: ${topic}`);
+        } catch (error) {
+          console.error(`❌ Failed to subscribe to topic ${topic}:`, (error as any)?.message);
+        }
       }
-    },
-  });
+
+      await consumer.run({
+        eachMessage: async ({ topic, message }: EachMessagePayload) => {
+          try {
+            console.log(`📨 Received Kafka message on topic: ${topic}`);
+            const handler = topicHandlers[topic];
+            if (!handler) {
+              console.warn(`⚠️ No handler found for topic: ${topic}`);
+              return;
+            }
+
+            const payload = message.value?.toString();
+            if (!payload) {
+              console.warn(`⚠️ Empty payload for topic: ${topic}`);
+              return;
+            }
+
+            const data = JSON.parse(payload);
+            console.log(`🔄 Processing ${topic} event for:`, data.adminEmail || data.email || data.companyEmail || 'unknown');
+            await handler(data);
+            console.log(`✅ Successfully processed ${topic} event`);
+          } catch (error) {
+            console.error(`❌ Failed to process ${topic} message:`, (error as any)?.message);
+            console.error('Error details:', error);
+          }
+        },
+      });
+      
+      console.log('✅ Kafka consumer started and ready to receive messages');
+      return; // Success, exit retry loop
+    } catch (error) {
+      retries++;
+      consumerConnected = false;
+      const errorMessage = (error as any)?.message || 'Unknown error';
+      console.error(`❌ Failed to connect to Kafka (attempt ${retries}/${maxRetries}):`, errorMessage);
+      
+      if (retries < maxRetries) {
+        const waitTime = Math.min(5000 * retries, 30000); // Exponential backoff, max 30s
+        console.log(`⏳ Retrying in ${waitTime / 1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else {
+        console.error('❌ Max retries reached. Kafka consumer failed to start.');
+        throw error;
+      }
+    }
+  }
 };
 
 export const disconnectKafka = async () => {
@@ -88,3 +135,6 @@ export const disconnectKafka = async () => {
   consumerConnected = false;
 };
 
+// I'd like to integrate this on the dashboard:  Customer Insights
+// Components: Top customers, repeat buyers, by revenue.
+// Data needs: Not directly exposed; would require aggregation endpoint (currently not documented). -> no design inspiration matched / waiting on API support

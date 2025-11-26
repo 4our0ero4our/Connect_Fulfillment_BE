@@ -30,9 +30,18 @@ const connectMongo = async () => {
 
 connectMongo();
 
-startNotificationConsumers().catch((error) => {
-  console.error('Kafka consumer failed to start:', error.message);
-});
+// Start Kafka consumers with retry logic
+const startKafkaWithRetry = async () => {
+  try {
+    await startNotificationConsumers();
+  } catch (error: any) {
+    console.error('❌ Kafka consumer failed to start:', error?.message || error);
+    console.log('🔄 Retrying Kafka connection in 5 seconds...');
+    setTimeout(startKafkaWithRetry, 5000);
+  }
+};
+
+startKafkaWithRetry();
 
 mongoose.connection.on('disconnected', () => {
   dbReady = false;

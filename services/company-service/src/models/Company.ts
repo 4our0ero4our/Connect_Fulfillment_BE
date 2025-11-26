@@ -20,6 +20,18 @@ export interface ICompany extends Document {
   deliveryTimeHours: number; // Number of hours after order placement when order will be ready (e.g., 2 for "ready in 2 hours")
   companyAdminEmails: string[];
   companyAdminIDDetails: { companyAdminName: string, companyAdminEmail: string, companyAdminPassword: string }[];
+  serviceSchedule?: {
+    enabled: boolean; // Whether schedule-based availability is enabled
+    schedule: {
+      monday: { enabled: boolean; startTime: string; endTime: string };
+      tuesday: { enabled: boolean; startTime: string; endTime: string };
+      wednesday: { enabled: boolean; startTime: string; endTime: string };
+      thursday: { enabled: boolean; startTime: string; endTime: string };
+      friday: { enabled: boolean; startTime: string; endTime: string };
+      saturday: { enabled: boolean; startTime: string; endTime: string };
+      sunday: { enabled: boolean; startTime: string; endTime: string };
+    };
+  };
   orderDeletionSettings?: {
     enabled: boolean;
     daysToDelete: number; // Number of days after which uncompleted orders should be deleted
@@ -51,6 +63,73 @@ const CompanySchema: Schema = new Schema<ICompany>(
     deliveryTimeHours: { type: Number, default: 2, min: [0.5, 'Delivery time must be at least 0.5 hours'], max: [168, 'Delivery time cannot exceed 168 hours (7 days)'] }, // Default 2 hours, min 0.5 hours (30 mins), max 7 days
     companyAdminEmails: { type: [String], default: [], required: true},
     companyAdminIDDetails: { type: [{ companyAdminName: String, companyAdminEmail: String, companyAdminPassword: String }], default: [], required: true},
+    serviceSchedule: {
+      type: {
+        enabled: { type: Boolean, default: false },
+        schedule: {
+          type: {
+            monday: {
+              type: {
+                enabled: { type: Boolean, default: false },
+                startTime: { type: String, default: '09:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] },
+                endTime: { type: String, default: '17:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] }
+              },
+              required: false
+            },
+            tuesday: {
+              type: {
+                enabled: { type: Boolean, default: false },
+                startTime: { type: String, default: '09:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] },
+                endTime: { type: String, default: '17:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] }
+              },
+              required: false
+            },
+            wednesday: {
+              type: {
+                enabled: { type: Boolean, default: false },
+                startTime: { type: String, default: '09:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] },
+                endTime: { type: String, default: '17:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] }
+              },
+              required: false
+            },
+            thursday: {
+              type: {
+                enabled: { type: Boolean, default: false },
+                startTime: { type: String, default: '09:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] },
+                endTime: { type: String, default: '17:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] }
+              },
+              required: false
+            },
+            friday: {
+              type: {
+                enabled: { type: Boolean, default: false },
+                startTime: { type: String, default: '09:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] },
+                endTime: { type: String, default: '17:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] }
+              },
+              required: false
+            },
+            saturday: {
+              type: {
+                enabled: { type: Boolean, default: false },
+                startTime: { type: String, default: '09:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] },
+                endTime: { type: String, default: '17:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] }
+              },
+              required: false
+            },
+            sunday: {
+              type: {
+                enabled: { type: Boolean, default: false },
+                startTime: { type: String, default: '09:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] },
+                endTime: { type: String, default: '17:00', match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Please enter a valid time in HH:mm format (24-hour)'] }
+              },
+              required: false
+            }
+          },
+          required: false
+        }
+      },
+      required: false
+    },
     orderDeletionSettings: {
       type: {
         enabled: { type: Boolean, default: false },

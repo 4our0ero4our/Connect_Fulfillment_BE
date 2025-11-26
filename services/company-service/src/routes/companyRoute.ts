@@ -1,7 +1,8 @@
 // This route is strictly for the companies to register itself in the system. They will be able to register themselves by providing their name, email, address, phone, website, logo, description, category, and sub-category as defined in the Company model.
-import { Router } from 'express';
-import { Request, Response } from 'express';
+import { Router, Request, Response, CookieOptions } from 'express';
 import { Company } from '../models/Company';
+import { CompanyAdmin } from '../models/CompanyAdmin';
+import { CompanyAdminSession } from '../models/CompanyAdminSession';
 import crypto from 'crypto';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import { scryptSync, randomBytes, timingSafeEqual } from 'crypto';
@@ -11,6 +12,7 @@ import { verifyCFAdminToken } from '../middleware/verifyCFAdminToken';
 import { verifyToken } from '../middleware/verifyToken';
 import { verifyCompanyAdminToken } from '../middleware/verifyCompanyAdminToken';
 import {
+  publishMerchantAdminRegistered,
   publishCompanyAdminRemoved,
   publishCompanyApiKeyStatusChanged,
   publishCompanyStatusChanged,
@@ -52,6 +54,66 @@ const verifyPassword = async (plainText: string, hashedValue: string): Promise<b
     return false;
   }
 };
+
+/**
+ * Validates password strength requirements.
+ * Password must contain: at least 8 characters, one uppercase letter, one lowercase letter,
+ * one number, and one special character (@$!%*?&).
+ * 
+ * @param {string} password - The password to validate
+ * @returns {boolean} True if password meets strength requirements, false otherwise
+ */
+const isValidPassword = (password: string): boolean => {
+  const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+  return passwordRegex.test(password);
+};
+
+const toPositiveNumber = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const ACCESS_TOKEN_COOKIE_NAME = process.env.COMPANY_ADMIN_ACCESS_COOKIE_NAME || 'ffm_access';
+const REFRESH_TOKEN_COOKIE_NAME = process.env.COMPANY_ADMIN_REFRESH_COOKIE_NAME || 'ffm_refresh';
+const ACCESS_TOKEN_TTL_MINUTES = toPositiveNumber(process.env.COMPANY_ADMIN_ACCESS_TOKEN_MINUTES, 15);
+const REFRESH_TOKEN_TTL_DAYS = toPositiveNumber(process.env.COMPANY_ADMIN_REFRESH_TOKEN_DAYS, 7);
+const ACCESS_TOKEN_TTL_MS = ACCESS_TOKEN_TTL_MINUTES * 60 * 1000;
+const REFRESH_TOKEN_TTL_MS = REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000;
+const ACCESS_TOKEN_EXPIRES_IN_SECONDS = ACCESS_TOKEN_TTL_MINUTES * 60;
+
+const cookieBaseOptions: CookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'strict',
+  domain: process.env.COMPANY_ADMIN_COOKIE_DOMAIN || undefined,
+  path: '/',
+};
+
+const createRefreshToken = () => crypto.randomBytes(64).toString('hex');
+const hashRefreshToken = (token: string) => crypto.createHash('sha256').update(token).digest('hex');
+
+const rawCompanyJwtSecret = process.env.JWT_SECRET;
+if (!rawCompanyJwtSecret) {
+  throw new Error('JWT_SECRET environment variable is required for company-service to issue merchant admin tokens.');
+}
+const COMPANY_JWT_SECRET: string = rawCompanyJwtSecret;
+
+const setAuthCookies = (res: Response, accessToken: string, refreshToken: string) => {
+  res.cookie(ACCESS_TOKEN_COOKIE_NAME, accessToken, {
+    ...cookieBaseOptions,
+    maxAge: ACCESS_TOKEN_TTL_MS,
+  });
+  res.cookie(REFRESH_TOKEN_COOKIE_NAME, refreshToken, {
+    ...cookieBaseOptions,
+    maxAge: REFRESH_TOKEN_TTL_MS,
+  });
+};
+
+const clearAuthCookies = (res: Response) => {
+  const clearOptions: CookieOptions = { ...cookieBaseOptions, maxAge: 0 };
+  res.clearCookie(ACCESS_TOKEN_COOKIE_NAME, clearOptions);
+  res.clearCookie(REFRESH_TOKEN_COOKIE_NAME, clearOptions);
+};
 const router = Router();
 const COMPANY_PORTAL_URL = (process.env.COMPANY_PORTAL_URL || 'https://portal.connectfulfillment.com').replace(/\/$/, '');
 
@@ -77,7 +139,7 @@ const hashToken = (token: string) => crypto.createHash('sha256').update(token).d
  * Used in emails and UI to prevent full API key exposure.
  * 
  * @param {string|null|undefined} apiKey - The API key to mask
- * @returns {string} Masked API key (e.g., "CFK_abcd••••wxyz")
+ * @returns {string} Masked API key (e.g., "FFM_abcd••••wxyz")
  */
 const maskApiKey = (apiKey?: string | null) => {
   if (!apiKey) return '***';
@@ -149,7 +211,7 @@ router.post('/register', async (req: Request, res: Response) => {
         }
       });
     }
-    const { companyName, companyEmail, companyAddress, companyPhone, companyWebsite, companyLogo, companyDescription, companyDetails, companyCategory, companySubCategory, deliveryTimeHours } = req.body;
+    const { companyName, companyEmail, companyAddress, companyPhone, companyWebsite, companyLogo, companyDescription, companyDetails, companyCategory, companySubCategory, deliveryTimeHours, serviceSchedule, orderDeletionSettings } = req.body;
     
     // Validate deliveryTimeHours if provided
     if (deliveryTimeHours !== undefined) {
@@ -160,12 +222,97 @@ router.post('/register', async (req: Request, res: Response) => {
         });
       }
     }
+
+    // Validate serviceSchedule if provided
+    if (serviceSchedule) {
+      if (serviceSchedule.enabled !== undefined && typeof serviceSchedule.enabled !== 'boolean') {
+        return res.status(400).json({
+          message: 'Validation error',
+          error: 'serviceSchedule.enabled must be a boolean'
+        });
+      }
+
+      if (serviceSchedule.schedule) {
+        const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+        const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+
+        for (const day of days) {
+          if (serviceSchedule.schedule[day]) {
+            const daySchedule = serviceSchedule.schedule[day];
+            
+            if (daySchedule.enabled !== undefined && typeof daySchedule.enabled !== 'boolean') {
+              return res.status(400).json({
+                message: 'Validation error',
+                error: `serviceSchedule.schedule.${day}.enabled must be a boolean`
+              });
+            }
+
+            if (daySchedule.startTime && !timeRegex.test(daySchedule.startTime)) {
+              return res.status(400).json({
+                message: 'Validation error',
+                error: `serviceSchedule.schedule.${day}.startTime must be in HH:mm format (24-hour)`
+              });
+            }
+
+            if (daySchedule.endTime && !timeRegex.test(daySchedule.endTime)) {
+              return res.status(400).json({
+                message: 'Validation error',
+                error: `serviceSchedule.schedule.${day}.endTime must be in HH:mm format (24-hour)`
+              });
+            }
+
+            if (daySchedule.startTime && daySchedule.endTime) {
+              const [startHour, startMin] = daySchedule.startTime.split(':').map(Number);
+              const [endHour, endMin] = daySchedule.endTime.split(':').map(Number);
+              const startMinutes = startHour * 60 + startMin;
+              const endMinutes = endHour * 60 + endMin;
+
+              if (endMinutes <= startMinutes) {
+                return res.status(400).json({
+                  message: 'Validation error',
+                  error: `serviceSchedule.schedule.${day}.endTime must be after startTime`
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Validate orderDeletionSettings if provided
+    if (orderDeletionSettings) {
+      if (orderDeletionSettings.enabled !== undefined && typeof orderDeletionSettings.enabled !== 'boolean') {
+        return res.status(400).json({
+          message: 'Validation error',
+          error: 'orderDeletionSettings.enabled must be a boolean'
+        });
+      }
+
+      if (orderDeletionSettings.daysToDelete !== undefined) {
+        if (typeof orderDeletionSettings.daysToDelete !== 'number' || orderDeletionSettings.daysToDelete < 1 || !Number.isInteger(orderDeletionSettings.daysToDelete)) {
+          return res.status(400).json({
+            message: 'Validation error',
+            error: 'orderDeletionSettings.daysToDelete must be an integer greater than or equal to 1'
+          });
+        }
+      }
+
+      if (orderDeletionSettings.deletionTime !== undefined) {
+        const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+        if (!timeRegex.test(orderDeletionSettings.deletionTime)) {
+          return res.status(400).json({
+            message: 'Validation error',
+            error: 'orderDeletionSettings.deletionTime must be in HH:mm format (24-hour), e.g., "21:00"'
+          });
+        }
+      }
+    }
     
     // Force isVerified to false - companies cannot self-verify
     // Only CF Admins can verify companies via PATCH /company/:companyId/verify
 
     // Generates strong random API key
-    const generateApiKey = () => `CFK_${crypto.randomBytes(48).toString('base64url')}`; // ~64 chars
+    const generateApiKey = () => `FFM_${crypto.randomBytes(48).toString('base64url')}`; // ~64 chars
 
     // Ensure unlikely collision is handled
     let companyApiKey = generateApiKey();
@@ -176,8 +323,8 @@ router.post('/register', async (req: Request, res: Response) => {
       companyApiKey = generateApiKey();
     }
 
-    // Create company with isVerified=false (default from schema, but explicitly set for clarity)
-    const company = await Company.create({ 
+    // Prepare company data
+    const companyData: any = {
       companyName, 
       companyEmail, 
       companyAddress, 
@@ -191,7 +338,20 @@ router.post('/register', async (req: Request, res: Response) => {
       companyApiKey,
       isVerified: false, // Always false on registration!😤
       deliveryTimeHours: deliveryTimeHours || 2 // Default to 2 hours if not provided
-    });
+    };
+
+    // Add optional serviceSchedule if provided
+    if (serviceSchedule) {
+      companyData.serviceSchedule = serviceSchedule;
+    }
+
+    // Add optional orderDeletionSettings if provided
+    if (orderDeletionSettings) {
+      companyData.orderDeletionSettings = orderDeletionSettings;
+    }
+
+    // Create company with isVerified=false (default from schema, but explicitly set for clarity)
+    const company = await Company.create(companyData);
 
     const companySafe = company.toObject();
     delete (companySafe as any).companyApiKey;
@@ -283,6 +443,22 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
       { $push: { companyAdminIDDetails: { companyAdminName, companyAdminEmail, companyAdminPassword: hashedPassword } } }
     );
     
+    // Also create a document in the CompanyAdmin collection for easy querying across all companies
+    // Check if admin already exists in CompanyAdmin collection (shouldn't happen, but safety check)
+    const existingAdminInCollection = await CompanyAdmin.findOne({ 
+      companyAdminEmail: companyAdminEmail.toLowerCase() 
+    });
+    
+    if (!existingAdminInCollection) {
+      await CompanyAdmin.create({
+        companyId: companyExists._id.toString(),
+        companyName: companyExists.companyName,
+        companyAdminName,
+        companyAdminEmail: companyAdminEmail.toLowerCase(),
+        companyAdminPassword: hashedPassword
+      });
+    }
+    
     // Create audit log
     await createAuditLog({
       action: 'company_admin_registered',
@@ -299,6 +475,22 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
       },
       service: 'company-service',
     }, req);
+    
+    // Send welcome email notification
+    try {
+      await publishMerchantAdminRegistered({
+        companyId: companyExists._id.toString(),
+        companyName: companyExists.companyName,
+        companyEmail: companyExists.companyEmail,
+        adminEmail: companyAdminEmail,
+        adminName: companyAdminName,
+        loginUrl: `${COMPANY_PORTAL_URL}/login`,
+      });
+      console.log(`✅ Published merchant_admin_registered event for ${companyAdminEmail}`);
+    } catch (error: any) {
+      // Log error but don't fail registration if email notification fails
+      console.error(`⚠️ Failed to publish merchant_admin_registered event:`, error?.message || error);
+    }
     
     res.status(201).json({ message: 'Company admin registered successfully', companyAdminName, companyAdminEmail, companyAdminPassword: hashedPassword });
   } catch (error: any) {
@@ -403,10 +595,23 @@ router.post('/company-admin/login', async (req: Request, res: Response) => {
         companyApiKey: companyExists.companyApiKey,
         companyName: companyExists.companyName
       } as JwtPayload,
-      process.env.JWT_SECRET!,
-      { expiresIn: '24h' }
+      COMPANY_JWT_SECRET,
+      { expiresIn: ACCESS_TOKEN_EXPIRES_IN_SECONDS }
     );
     
+    const refreshToken = createRefreshToken();
+    await CompanyAdminSession.create({
+      companyAdminEmail: companyAdminExists.companyAdminEmail.toLowerCase(),
+      companyAdminName: companyAdminExists.companyAdminName,
+      companyId: companyExists._id.toString(),
+      refreshTokenHash: hashRefreshToken(refreshToken),
+      expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+      userAgent: req.headers['user-agent'],
+      ipAddress: req.ip,
+    });
+
+    setAuthCookies(res, token, refreshToken);
+
     console.log(`[Login] Login successful in ${Date.now() - startTime}ms`);
     
     res.status(200).json({ 
@@ -443,6 +648,252 @@ router.get('/companies', verifyCFAdminToken, async (_req: Request, res: Response
   // if (!req.body.company) return res.status(401).json({ message: 'Unauthorized' });
   const companyNames = await Company.find({}, 'companyName');
   res.status(200).json({ companyNames });
+});
+
+router.post('/company-admin/refresh-token', async (req: Request, res: Response) => {
+  try {
+    const incomingRefreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE_NAME] || req.body?.refreshToken;
+    if (!incomingRefreshToken) {
+      return res.status(401).json({ message: 'Refresh token missing' });
+    }
+
+    const hashedToken = hashRefreshToken(incomingRefreshToken);
+    const session = await CompanyAdminSession.findOne({ refreshTokenHash: hashedToken });
+
+    if (!session) {
+      clearAuthCookies(res);
+      return res.status(401).json({ message: 'Invalid refresh token' });
+    }
+
+    if (session.expiresAt.getTime() < Date.now()) {
+      await session.deleteOne();
+      clearAuthCookies(res);
+      return res.status(401).json({ message: 'Refresh token expired' });
+    }
+
+    const company = await Company.findById(session.companyId).lean();
+    if (!company) {
+      await session.deleteOne();
+      clearAuthCookies(res);
+      return res.status(401).json({ message: 'Company not found' });
+    }
+
+    if (!company.isVerified) {
+      await session.deleteOne();
+      clearAuthCookies(res);
+      return res.status(401).json({ message: 'Company is not verified' });
+    }
+
+    const companyAdminExists = (company.companyAdminIDDetails || []).find(
+      (admin: { companyAdminEmail: string }) => admin.companyAdminEmail.toLowerCase() === session.companyAdminEmail
+    );
+
+    if (!companyAdminExists) {
+      await session.deleteOne();
+      clearAuthCookies(res);
+      return res.status(401).json({ message: 'Company admin not found' });
+    }
+
+    const token = jwt.sign(
+      {
+        companyAdminId: (company.companyAdminIDDetails || []).findIndex(
+          (admin: { companyAdminEmail: string }) => admin.companyAdminEmail.toLowerCase() === session.companyAdminEmail
+        ),
+        companyAdminEmail: session.companyAdminEmail,
+        companyAdminName: companyAdminExists.companyAdminName,
+        companyId: company._id?.toString(),
+        companyApiKey: company.companyApiKey,
+        companyName: company.companyName
+      } as JwtPayload,
+      COMPANY_JWT_SECRET,
+      { expiresIn: ACCESS_TOKEN_EXPIRES_IN_SECONDS }
+    );
+
+    const newRefreshToken = createRefreshToken();
+    session.refreshTokenHash = hashRefreshToken(newRefreshToken);
+    session.expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
+    session.lastUsedAt = new Date();
+    session.userAgent = req.headers['user-agent'] || session.userAgent;
+    session.ipAddress = req.ip || session.ipAddress;
+    await session.save();
+
+    setAuthCookies(res, token, newRefreshToken);
+
+    return res.status(200).json({
+      message: 'Tokens refreshed successfully',
+      token,
+      companyAdmin: {
+        companyAdminName: companyAdminExists.companyAdminName,
+        companyAdminEmail: companyAdminExists.companyAdminEmail
+      }
+    });
+  } catch (error: any) {
+    console.error('Error refreshing token:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        message: 'Internal server error',
+        error: error?.message || 'An unknown error occurred'
+      });
+    }
+  }
+});
+
+router.post('/company-admin/logout', async (req: Request, res: Response) => {
+  try {
+    const incomingRefreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE_NAME] || req.body?.refreshToken;
+    if (incomingRefreshToken) {
+      await CompanyAdminSession.deleteOne({ refreshTokenHash: hashRefreshToken(incomingRefreshToken) });
+    }
+
+    clearAuthCookies(res);
+
+    return res.status(200).json({ message: 'Logout successful' });
+  } catch (error: any) {
+    console.error('Error logging out:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        message: 'Internal server error',
+        error: error?.message || 'An unknown error occurred'
+      });
+    }
+  }
+});
+
+/**
+ * Change password for a company admin.
+ * 
+ * Validates the current password, checks new password strength, and updates
+ * the admin's password in both the Company model's companyAdminIDDetails array
+ * and the CompanyAdmin collection. The new password must be different from the
+ * current password. Requires authentication via company admin JWT token.
+ * 
+ * @route POST /company-admin/change-password
+ * @access Private (requires Company Admin JWT token)
+ * 
+ * @param {string} req.body.currentPassword - Current password for verification
+ * @param {string} req.body.newPassword - New password (must meet strength requirements)
+ * 
+ * @returns {Object} 200 - Password changed successfully
+ * @returns {Object} 400 - Validation error (missing fields, invalid format, same password)
+ * @returns {Object} 401 - Invalid credentials (incorrect current password or unauthorized)
+ */
+router.post('/company-admin/change-password', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const companyAdminEmail = res.locals.companyAdminEmail;
+    const companyId = res.locals.companyId;
+    const companyAdminName = res.locals.companyAdminName;
+
+    // Validation checks
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        message: 'All fields are required',
+        errors: {
+          currentPassword: !currentPassword ? 'Current password is required' : null,
+          newPassword: !newPassword ? 'New password is required' : null
+        }
+      });
+    }
+
+    // Validate new password strength
+    if (!isValidPassword(newPassword)) {
+      return res.status(400).json({
+        message: 'Invalid password',
+        error: 'Password must contain at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&)'
+      });
+    }
+
+    // Check if new password is the same as the current password
+    if (newPassword === currentPassword) {
+      return res.status(400).json({
+        message: 'Invalid password',
+        error: 'The new password must be different from the current password'
+      });
+    }
+
+    // Find company and verify admin exists
+    const company = await Company.findById(companyId);
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system'
+      });
+    }
+
+    // Find the admin in companyAdminIDDetails array
+    const companyAdminExists = (company.companyAdminIDDetails || []).find(
+      (admin: { companyAdminEmail: string }) => admin.companyAdminEmail.toLowerCase() === companyAdminEmail.toLowerCase()
+    );
+
+    if (!companyAdminExists) {
+      return res.status(404).json({
+        message: 'Company admin not found',
+        error: 'Company admin not found with this email'
+      });
+    }
+
+    // Verify current password
+    const isPasswordValid = await verifyPassword(currentPassword, companyAdminExists.companyAdminPassword);
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        message: 'Invalid credentials',
+        error: 'The current password you provided is incorrect'
+      });
+    }
+
+    // Hash new password
+    let hashedNewPassword: string;
+    if (bcrypt && typeof bcrypt.hash === 'function') {
+      hashedNewPassword = await bcrypt.hash(newPassword, 12);
+    } else {
+      const salt = randomBytes(16).toString('hex');
+      const derived = scryptSync(newPassword, salt, 64).toString('hex');
+      hashedNewPassword = `${salt}:${derived}`;
+    }
+
+    // Update password in Company model's companyAdminIDDetails array
+    const adminIndex = (company.companyAdminIDDetails || []).findIndex(
+      (admin: { companyAdminEmail: string }) => admin.companyAdminEmail.toLowerCase() === companyAdminEmail.toLowerCase()
+    );
+
+    if (adminIndex !== -1) {
+      company.companyAdminIDDetails[adminIndex].companyAdminPassword = hashedNewPassword;
+      await company.save();
+    }
+
+    // Update password in CompanyAdmin collection
+    await CompanyAdmin.updateOne(
+      { companyAdminEmail: companyAdminEmail.toLowerCase() },
+      { companyAdminPassword: hashedNewPassword }
+    );
+
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'company_admin_password_changed',
+      ...userInfo,
+      targetCompany: companyId,
+      targetCompanyName: company.companyName,
+      targetAdmin: companyAdminEmail.toLowerCase(),
+      details: {
+        adminEmail: companyAdminEmail.toLowerCase(),
+        adminName: companyAdminName,
+      },
+      service: 'company-service',
+    }, req);
+
+    return res.status(200).json({
+      message: 'Your password has been changed successfully. Please login with your new password.'
+    });
+  } catch (error: any) {
+    console.error('Error changing password:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        message: 'Internal server error',
+        error: error?.message || 'An unknown error occurred'
+      });
+    }
+  }
 });
 
 /**
@@ -520,7 +971,7 @@ router.get('/company-admin/verify-token', async (req: Request, res: Response) =>
     if (!token) {
       return res.status(401).json({ message: 'Unauthorized', error: 'No token provided' });
     }
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
+    const decoded = jwt.verify(token, COMPANY_JWT_SECRET) as JwtPayload;
     res.status(200).json({ message: 'Token verified', companyAdmin: { companyAdminName: decoded.companyAdminName, companyAdminEmail: decoded.companyAdminEmail } });
   } catch (error: any) {
     return res.status(401).json({ message: 'Unauthorized', error: 'Invalid token' });
@@ -956,6 +1407,11 @@ router.delete('/company/company-admin', verifyCFAdminToken, async (req: Request,
     company.companyAdminEmails = (company.companyAdminEmails || []).filter(email => email.toLowerCase() !== normalizedEmail);
     await company.save();
 
+    // Also remove from CompanyAdmin collection
+    await CompanyAdmin.deleteOne({ 
+      companyAdminEmail: normalizedEmail 
+    });
+
     // Create audit log
     const userInfo = extractUserInfo(res.locals);
     await createAuditLog({
@@ -1141,6 +1597,410 @@ router.patch('/company/service-status', verifyCompanyAdminToken, async (req: Req
   }
 });
 
+/**
+ * Get service availability schedule for a company.
+ * 
+ * Returns the current service schedule configuration including weekly schedule
+ * (Monday-Sunday) with start and end times for each day. Company admins can use
+ * this to view their current schedule settings.
+ * 
+ * @route GET /company/service-schedule
+ * @access Private (requires Company Admin JWT token)
+ * 
+ * @returns {Object} 200 - Service schedule retrieved successfully
+ * @returns {Object} 403 - Access denied (company not verified or inactive)
+ * @returns {Object} 404 - Company not found
+ */
+router.get('/company/service-schedule', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const companyId = res.locals.companyId;
+    const company = await Company.findById(companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system'
+      });
+    }
+
+    // Ensure company is verified and active
+    if (!company.isVerified || !company.isActive) {
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Your company must be verified and active to view service schedule'
+      });
+    }
+
+    return res.status(200).json({
+      message: 'Service schedule retrieved successfully',
+      serviceSchedule: company.serviceSchedule || {
+        enabled: false,
+        schedule: {
+          monday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          tuesday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          wednesday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          thursday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          friday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          saturday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          sunday: { enabled: false, startTime: '09:00', endTime: '17:00' }
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error('Error fetching service schedule:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
+});
+
+/**
+ * Update service availability schedule for a company.
+ * 
+ * Allows company admins to configure a weekly schedule for service availability.
+ * When schedule-based availability is enabled, the system will automatically check
+ * if the current time falls within the configured hours for the current day before
+ * accepting orders. This is useful for businesses with regular operating hours.
+ * 
+ * @route PATCH /company/service-schedule
+ * @access Private (requires Company Admin JWT token)
+ * 
+ * @param {boolean} req.body.enabled - Whether schedule-based availability is enabled
+ * @param {Object} req.body.schedule - Weekly schedule configuration
+ * @param {Object} req.body.schedule.monday - Monday schedule { enabled, startTime, endTime }
+ * @param {Object} req.body.schedule.tuesday - Tuesday schedule { enabled, startTime, endTime }
+ * @param {Object} req.body.schedule.wednesday - Wednesday schedule { enabled, startTime, endTime }
+ * @param {Object} req.body.schedule.thursday - Thursday schedule { enabled, startTime, endTime }
+ * @param {Object} req.body.schedule.friday - Friday schedule { enabled, startTime, endTime }
+ * @param {Object} req.body.schedule.saturday - Saturday schedule { enabled, startTime, endTime }
+ * @param {Object} req.body.schedule.sunday - Sunday schedule { enabled, startTime, endTime }
+ * 
+ * @returns {Object} 200 - Service schedule updated successfully
+ * @returns {Object} 400 - Validation error (invalid time format, missing fields)
+ * @returns {Object} 403 - Access denied (company not verified or inactive)
+ */
+router.patch('/company/service-schedule', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { enabled, schedule } = req.body;
+    const companyId = res.locals.companyId;
+    const company = await Company.findById(companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system'
+      });
+    }
+
+    // Ensure company is verified and active
+    if (!company.isVerified || !company.isActive) {
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Your company must be verified and active to manage service schedule'
+      });
+    }
+
+    // Validate enabled field
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'enabled field must be a boolean'
+      });
+    }
+
+    // Validate schedule structure if provided
+    if (schedule) {
+      const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+      const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+
+      for (const day of days) {
+        if (schedule[day]) {
+          const daySchedule = schedule[day];
+          
+          // Validate enabled field
+          if (daySchedule.enabled !== undefined && typeof daySchedule.enabled !== 'boolean') {
+            return res.status(400).json({
+              message: 'Validation error',
+              error: `${day}.enabled must be a boolean`
+            });
+          }
+
+          // Validate time format
+          if (daySchedule.startTime && !timeRegex.test(daySchedule.startTime)) {
+            return res.status(400).json({
+              message: 'Validation error',
+              error: `${day}.startTime must be in HH:mm format (24-hour)`
+            });
+          }
+
+          if (daySchedule.endTime && !timeRegex.test(daySchedule.endTime)) {
+            return res.status(400).json({
+              message: 'Validation error',
+              error: `${day}.endTime must be in HH:mm format (24-hour)`
+            });
+          }
+
+          // Validate that endTime is after startTime
+          if (daySchedule.startTime && daySchedule.endTime) {
+            const [startHour, startMin] = daySchedule.startTime.split(':').map(Number);
+            const [endHour, endMin] = daySchedule.endTime.split(':').map(Number);
+            const startMinutes = startHour * 60 + startMin;
+            const endMinutes = endHour * 60 + endMin;
+
+            if (endMinutes <= startMinutes) {
+              return res.status(400).json({
+                message: 'Validation error',
+                error: `${day}.endTime must be after ${day}.startTime`
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Update service schedule
+    const previousSchedule = company.serviceSchedule;
+    
+    if (!company.serviceSchedule) {
+      company.serviceSchedule = {
+        enabled: false,
+        schedule: {
+          monday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          tuesday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          wednesday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          thursday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          friday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          saturday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+          sunday: { enabled: false, startTime: '09:00', endTime: '17:00' }
+        }
+      };
+    }
+
+    // Update enabled flag if provided
+    if (enabled !== undefined) {
+      company.serviceSchedule.enabled = enabled;
+    }
+
+    // Update schedule if provided
+    if (schedule) {
+      const days: Array<'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'> = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+      for (const day of days) {
+        if (schedule[day]) {
+          if (schedule[day].enabled !== undefined) {
+            company.serviceSchedule.schedule[day].enabled = schedule[day].enabled;
+          }
+          if (schedule[day].startTime) {
+            company.serviceSchedule.schedule[day].startTime = schedule[day].startTime;
+          }
+          if (schedule[day].endTime) {
+            company.serviceSchedule.schedule[day].endTime = schedule[day].endTime;
+          }
+        }
+      }
+    }
+
+    await company.save();
+
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'company_service_schedule_updated',
+      ...userInfo,
+      targetCompany: company._id.toString(),
+      targetCompanyName: company.companyName,
+      details: {
+        oldValue: previousSchedule,
+        newValue: company.serviceSchedule,
+        enabled: company.serviceSchedule.enabled,
+      },
+      service: 'company-service',
+    }, req);
+
+    return res.status(200).json({
+      message: 'Service schedule updated successfully',
+      serviceSchedule: company.serviceSchedule
+    });
+  } catch (error: any) {
+    console.error('Error updating service schedule:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
+});
+
+/**
+ * Get order deletion settings for a company.
+ * 
+ * Returns the current order deletion settings including whether automatic deletion
+ * is enabled, how many days to keep orders, and the time of day to run deletion.
+ * Company admins can use this to view their current deletion configuration.
+ * 
+ * @route GET /company/deletion-settings
+ * @access Private (requires Company Admin JWT token)
+ * 
+ * @returns {Object} 200 - Deletion settings retrieved successfully
+ * @returns {Object} 403 - Access denied (company not verified or inactive)
+ * @returns {Object} 404 - Company not found
+ */
+router.get('/company/deletion-settings', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const companyId = res.locals.companyId;
+    const company = await Company.findById(companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system'
+      });
+    }
+
+    // Ensure company is verified and active
+    if (!company.isVerified || !company.isActive) {
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Your company must be verified and active to view deletion settings'
+      });
+    }
+
+    return res.status(200).json({
+      message: 'Deletion settings retrieved successfully',
+      deletionSettings: company.orderDeletionSettings || {
+        enabled: false,
+        daysToDelete: 3,
+        deletionTime: '21:00'
+      }
+    });
+  } catch (error: any) {
+    console.error('Error fetching deletion settings:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
+});
+
+/**
+ * Update order deletion settings for a company.
+ * 
+ * Allows company admins to configure automatic order deletion. When enabled,
+ * uncompleted orders older than the specified number of days will be automatically
+ * marked as deleted at the configured time each day. Only uncompleted orders
+ * (not status "completed") are eligible for automatic deletion.
+ * 
+ * @route PATCH /company/deletion-settings
+ * @access Private (requires Company Admin JWT token)
+ * 
+ * @param {boolean} [req.body.enabled] - Whether automatic deletion is enabled
+ * @param {number} [req.body.daysToDelete] - Number of days to keep orders before deletion (minimum 1)
+ * @param {string} [req.body.deletionTime] - Time of day to run deletion (format: "HH:mm" in 24-hour format, e.g., "21:00")
+ * 
+ * @returns {Object} 200 - Deletion settings updated successfully
+ * @returns {Object} 400 - Validation error (invalid time format, daysToDelete < 1)
+ * @returns {Object} 403 - Access denied (company not verified or inactive)
+ */
+router.patch('/company/deletion-settings', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { enabled, daysToDelete, deletionTime } = req.body;
+    const companyId = res.locals.companyId;
+    const company = await Company.findById(companyId);
+    
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system'
+      });
+    }
+
+    // Ensure company is verified and active
+    if (!company.isVerified || !company.isActive) {
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Your company must be verified and active to manage deletion settings'
+      });
+    }
+
+    // Validate enabled field
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'enabled field must be a boolean'
+      });
+    }
+
+    // Validate daysToDelete
+    if (daysToDelete !== undefined) {
+      if (typeof daysToDelete !== 'number' || daysToDelete < 1 || !Number.isInteger(daysToDelete)) {
+        return res.status(400).json({
+          message: 'Validation error',
+          error: 'daysToDelete must be an integer greater than or equal to 1'
+        });
+      }
+    }
+
+    // Validate deletionTime format
+    if (deletionTime !== undefined) {
+      const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+      if (!timeRegex.test(deletionTime)) {
+        return res.status(400).json({
+          message: 'Validation error',
+          error: 'deletionTime must be in HH:mm format (24-hour), e.g., "21:00"'
+        });
+      }
+    }
+
+    // Initialize orderDeletionSettings if it doesn't exist
+    if (!company.orderDeletionSettings) {
+      company.orderDeletionSettings = {
+        enabled: false,
+        daysToDelete: 3,
+        deletionTime: '21:00'
+      };
+    }
+
+    const previousSettings = { ...company.orderDeletionSettings };
+
+    // Update fields if provided
+    if (enabled !== undefined) {
+      company.orderDeletionSettings.enabled = enabled;
+    }
+    if (daysToDelete !== undefined) {
+      company.orderDeletionSettings.daysToDelete = daysToDelete;
+    }
+    if (deletionTime !== undefined) {
+      company.orderDeletionSettings.deletionTime = deletionTime;
+    }
+
+    await company.save();
+
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'company_deletion_settings_updated',
+      ...userInfo,
+      targetCompany: company._id.toString(),
+      targetCompanyName: company.companyName,
+      details: {
+        oldValue: previousSettings,
+        newValue: company.orderDeletionSettings,
+      },
+      service: 'company-service',
+    }, req);
+
+    return res.status(200).json({
+      message: 'Deletion settings updated successfully',
+      deletionSettings: company.orderDeletionSettings
+    });
+  } catch (error: any) {
+    console.error('Error updating deletion settings:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
+});
+
 export default router;
 
 // {
@@ -1160,5 +2020,5 @@ export default router;
 //   "companyAdminName": "John Doe",
 //   "companyAdminEmail": "john.doe@example.com",
 //   "companyAdminPassword": "password123",
-//   "companyApiKey": "CFK_1234567890"
+//   "companyApiKey": "FFM_1234567890"
 // }
