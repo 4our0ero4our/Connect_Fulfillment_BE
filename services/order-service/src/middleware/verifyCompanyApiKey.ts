@@ -57,6 +57,7 @@ export const verifyCompanyApiKey = async (req: Request, res: Response, next: Nex
       res.locals.companyId = companyId;
       res.locals.companyApiKey = companyApiKey;
       res.locals.companyName = companyName;
+      res.locals.isMerchant = true;
       return next();
     }
 
@@ -85,6 +86,7 @@ export const verifyCompanyApiKey = async (req: Request, res: Response, next: Nex
     res.locals.companyId = company._id?.toString() || company.id?.toString();
     res.locals.companyApiKey = company.companyApiKey;
     res.locals.companyName = company.companyName;
+    res.locals.isMerchant = true;
 
     req.headers['x-company-id'] = res.locals.companyId;
     req.headers['x-company-api-key'] = company.companyApiKey;

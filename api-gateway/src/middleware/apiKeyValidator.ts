@@ -67,7 +67,6 @@ export const validateApiKey = async (req: Request, res: Response, next: NextFunc
         
         // Check if it's a CF Admin token - allow admins to bypass API key check
         if (decoded.adminId || decoded.adminEmail) {
-          console.log('CF Admin token verified, allowing access without API key');
           if (source !== 'header' && !req.headers.authorization) {
             req.headers.authorization = `Bearer ${token}`;
           }
@@ -81,7 +80,6 @@ export const validateApiKey = async (req: Request, res: Response, next: NextFunc
         
         // Check if it's a Company Admin token - extract API key from token
         if (decoded.companyAdminId !== undefined || decoded.companyAdminEmail) {
-          console.log(`Company Admin token verified from ${source === 'company_cookie' ? 'cookie' : source === 'cf_cookie' ? 'cf cookie' : 'header'}, extracting API key from token`);
           const companyApiKey = decoded.companyApiKey;
           
           if (!companyApiKey) {
@@ -101,7 +99,6 @@ export const validateApiKey = async (req: Request, res: Response, next: NextFunc
           }
           
           const company = response.data.company;
-          console.log(`Company API key from token is valid via ${baseUrl}`, company);
           res.locals.company = company ? company : 'No company details found';
           res.locals.isCompanyAdmin = true;
           res.locals.companyAdminId = decoded.companyAdminId;
@@ -124,7 +121,6 @@ export const validateApiKey = async (req: Request, res: Response, next: NextFunc
         }
       } catch (jwtError: any) {
         // Token invalid or expired - continue to check API key
-        console.log('Token verification failed, checking API key instead');
       }
     }
 
@@ -156,7 +152,6 @@ export const validateApiKey = async (req: Request, res: Response, next: NextFunc
     }
   
     const company = response.data.company;
-    console.log(`Company API key is valid via ${baseUrl}`, company);
     res.locals.company = company ? company : 'No company details found';
 
     if (company) {

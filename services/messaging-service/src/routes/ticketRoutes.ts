@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import mongoose from 'mongoose';
 import { SupportTicket, TicketStatus, ISupportTicket } from '../models/SupportTicket';
 import { Message, IMessage } from '../models/Message';
 import { verifyCFAdminToken } from '../middleware/verifyCFAdminToken';
@@ -10,6 +11,25 @@ import axios from 'axios';
 
 const router = Router();
 const COMPANY_SERVICE_URL = process.env.COMPANY_SERVICE_URL || 'http://company-service:4004';
+
+const findTicketByIdentifier = async (
+  ticketIdentifier: string,
+  { lean = false }: { lean?: boolean } = {}
+) => {
+  let ticket = null;
+
+  if (mongoose.Types.ObjectId.isValid(ticketIdentifier)) {
+    const byIdQuery = SupportTicket.findById(ticketIdentifier);
+    ticket = lean ? await byIdQuery.lean() : await byIdQuery;
+  }
+
+  if (!ticket) {
+    const byNumberQuery = SupportTicket.findOne({ ticketNumber: ticketIdentifier });
+    ticket = lean ? await byNumberQuery.lean() : await byNumberQuery;
+  }
+
+  return ticket;
+};
 
 // WebSocket broadcast functions (will be set by index.ts after initialization)
 let broadcastMessageFn: ((ticketId: string, companyId: string, data: any) => void) | null = null;
@@ -246,6 +266,7 @@ router.post('/tickets', verifyAdminOrMerchant, async (req: Request, res: Respons
       message: 'Support ticket created successfully',
       ticket: {
         id: ticket._id,
+        ticketId: ticket._id.toString(),
         ticketNumber: ticket.ticketNumber,
         customName: ticket.customName,
         companyId: ticket.companyId,
@@ -340,27 +361,31 @@ router.get('/tickets', verifyAdminOrMerchant, async (req: Request, res: Response
 
     res.status(200).json({
       message: 'Support tickets retrieved successfully',
-      tickets: tickets.map(ticket => ({
-        id: ticket._id,
-        ticketNumber: ticket.ticketNumber,
-        customName: ticket.customName,
-        displayName: ticket.customName || ticket.ticketNumber,
-        companyId: ticket.companyId,
-        companyName: ticket.companyName,
-        status: ticket.status,
-        priority: ticket.priority,
-        category: ticket.category,
-        createdBy: ticket.createdBy,
-        assignedTo: ticket.assignedTo,
-        lastMessageAt: ticket.lastMessageAt,
-        lastMessagePreview: ticket.lastMessagePreview,
-        messageCount: ticket.messageCount,
-        unreadCount: ticket.unreadCount,
-        resolvedAt: ticket.resolvedAt,
-        closedAt: ticket.closedAt,
-        createdAt: ticket.createdAt,
-        updatedAt: ticket.updatedAt,
-      })),
+      tickets: tickets.map(ticket => {
+        const normalizedId = ticket._id?.toString?.() ?? ticket._id;
+        return {
+          id: normalizedId,
+          ticketId: normalizedId,
+          ticketNumber: ticket.ticketNumber,
+          customName: ticket.customName,
+          displayName: ticket.customName || ticket.ticketNumber,
+          companyId: ticket.companyId,
+          companyName: ticket.companyName,
+          status: ticket.status,
+          priority: ticket.priority,
+          category: ticket.category,
+          createdBy: ticket.createdBy,
+          assignedTo: ticket.assignedTo,
+          lastMessageAt: ticket.lastMessageAt,
+          lastMessagePreview: ticket.lastMessagePreview,
+          messageCount: ticket.messageCount,
+          unreadCount: ticket.unreadCount,
+          resolvedAt: ticket.resolvedAt,
+          closedAt: ticket.closedAt,
+          createdAt: ticket.createdAt,
+          updatedAt: ticket.updatedAt,
+        };
+      }),
       pagination: {
         page,
         limit,
@@ -395,12 +420,12 @@ router.get('/tickets', verifyAdminOrMerchant, async (req: Request, res: Response
  */
 router.get('/tickets/:ticketId', verifyAdminOrMerchant, async (req: Request, res: Response) => {
   try {
-    const ticketId = req.params.ticketId;
+    const ticketIdentifier = req.params.ticketId;
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
     const skip = (page - 1) * limit;
 
-    const ticket = await SupportTicket.findById(ticketId).lean();
+    const ticket = await findTicketByIdentifier(ticketIdentifier, { lean: true });
 
     if (!ticket) {
       return res.status(404).json({
@@ -419,9 +444,11 @@ router.get('/tickets/:ticketId', verifyAdminOrMerchant, async (req: Request, res
       }
     }
 
+    const normalizedTicketId = ticket._id?.toString?.() ?? ticket._id;
+
     // Get messages
-    const totalMessages = await Message.countDocuments({ ticketId: ticketId });
-    const messages = await Message.find({ ticketId: ticketId })
+    const totalMessages = await Message.countDocuments({ ticketId: normalizedTicketId });
+    const messages = await Message.find({ ticketId: normalizedTicketId })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -430,7 +457,8 @@ router.get('/tickets/:ticketId', verifyAdminOrMerchant, async (req: Request, res
     res.status(200).json({
       message: 'Support ticket retrieved successfully',
       ticket: {
-        id: ticket._id,
+        id: normalizedTicketId,
+        ticketId: normalizedTicketId,
         ticketNumber: ticket.ticketNumber,
         customName: ticket.customName,
         displayName: ticket.customName || ticket.ticketNumber,
@@ -506,7 +534,7 @@ router.post('/tickets/:ticketId/messages', verifyAdminOrMerchant, async (req: Re
       });
     }
 
-    const ticket = await SupportTicket.findById(ticketId);
+    const ticket = await findTicketByIdentifier(ticketId);
 
     if (!ticket) {
       return res.status(404).json({
@@ -552,8 +580,9 @@ router.post('/tickets/:ticketId/messages', verifyAdminOrMerchant, async (req: Re
     }
 
     // Create message
+    const normalizedTicketId = ticket._id.toString();
     const message = await Message.create({
-      ticketId: ticket._id.toString(),
+      ticketId: normalizedTicketId,
       ticketNumber: ticket.ticketNumber,
       senderType,
       senderId,
@@ -625,11 +654,11 @@ router.post('/tickets/:ticketId/messages', verifyAdminOrMerchant, async (req: Re
     // Broadcast WebSocket event
     if (broadcastMessageFn) {
       broadcastMessageFn(
-        ticket._id.toString(),
+        normalizedTicketId,
         ticket.companyId,
         {
           messageId: message._id.toString(),
-          ticketId: ticket._id.toString(),
+          ticketId: normalizedTicketId,
           ticketNumber: ticket.ticketNumber,
           content: message.content,
           senderType,
@@ -653,7 +682,8 @@ router.post('/tickets/:ticketId/messages', verifyAdminOrMerchant, async (req: Re
         createdAt: message.createdAt,
       },
       ticket: {
-        id: ticket._id,
+        id: normalizedTicketId,
+        ticketId: normalizedTicketId,
         status: ticket.status,
         assignedTo: ticket.assignedTo,
         unreadCount: ticket.unreadCount,
@@ -695,7 +725,7 @@ router.patch('/tickets/:ticketId/status', verifyAdminOrMerchant, async (req: Req
       });
     }
 
-    const ticket = await SupportTicket.findById(ticketId);
+    const ticket = await findTicketByIdentifier(ticketId);
 
     if (!ticket) {
       return res.status(404).json({
@@ -778,8 +808,9 @@ router.patch('/tickets/:ticketId/status', verifyAdminOrMerchant, async (req: Req
     }, req);
 
     // Publish Kafka event
+    const normalizedTicketId = ticket._id.toString();
     await publishTicketStatusUpdated({
-      ticketId: ticket._id.toString(),
+      ticketId: normalizedTicketId,
       ticketNumber: ticket.ticketNumber,
       companyId: ticket.companyId,
       companyName: ticket.companyName,
@@ -800,10 +831,10 @@ router.patch('/tickets/:ticketId/status', verifyAdminOrMerchant, async (req: Req
     // Broadcast WebSocket event
     if (broadcastTicketStatusUpdateFn) {
       broadcastTicketStatusUpdateFn(
-        ticket._id.toString(),
+        normalizedTicketId,
         ticket.companyId,
         {
-          ticketId: ticket._id.toString(),
+          ticketId: normalizedTicketId,
           ticketNumber: ticket.ticketNumber,
           oldStatus,
           newStatus: status,
@@ -817,7 +848,8 @@ router.patch('/tickets/:ticketId/status', verifyAdminOrMerchant, async (req: Req
     res.status(200).json({
       message: 'Ticket status updated successfully',
       ticket: {
-        id: ticket._id,
+        id: normalizedTicketId,
+        ticketId: normalizedTicketId,
         ticketNumber: ticket.ticketNumber,
         status: ticket.status,
         assignedTo: ticket.assignedTo,
@@ -848,9 +880,9 @@ router.patch('/tickets/:ticketId/status', verifyAdminOrMerchant, async (req: Req
  */
 router.patch('/tickets/:ticketId/messages/read', verifyAdminOrMerchant, async (req: Request, res: Response) => {
   try {
-    const ticketId = req.params.ticketId;
+    const ticketIdentifier = req.params.ticketId;
 
-    const ticket = await SupportTicket.findById(ticketId);
+    const ticket = await findTicketByIdentifier(ticketIdentifier);
 
     if (!ticket) {
       return res.status(404).json({
@@ -873,10 +905,12 @@ router.patch('/tickets/:ticketId/messages/read', verifyAdminOrMerchant, async (r
     const readerType = res.locals.isAdmin ? 'cf_admin' : 'merchant';
     const readerEmail = res.locals.isAdmin ? res.locals.adminEmail : res.locals.companyAdminEmail;
 
+    const normalizedTicketId = ticket._id.toString();
+
     // Mark unread messages as read
     const updateResult = await Message.updateMany(
       {
-        ticketId: ticketId,
+        ticketId: normalizedTicketId,
         read: false,
         senderType: readerType === 'cf_admin' ? 'merchant' : 'cf_admin', // Mark opposite sender's messages as read
       },
@@ -960,31 +994,36 @@ router.get('/tickets/log', verifyCFAdminToken, async (req: Request, res: Respons
 
     res.status(200).json({
       message: 'Ticket log retrieved successfully',
-      tickets: tickets.map(ticket => ({
-        ticketNumber: ticket.ticketNumber,
-        displayName: ticket.customName || ticket.ticketNumber,
-        companyId: ticket.companyId,
-        companyName: ticket.companyName,
-        status: ticket.status,
-        priority: ticket.priority,
-        category: ticket.category,
-        createdBy: {
-          type: ticket.createdBy.type,
-          userEmail: ticket.createdBy.userEmail,
-          userName: ticket.createdBy.userName,
-          createdAt: ticket.createdAt,
-        },
-        assignedTo: ticket.assignedTo ? {
-          cfAdminEmail: ticket.assignedTo.cfAdminEmail,
-          cfAdminName: ticket.assignedTo.cfAdminName,
-          assignedAt: ticket.assignedTo.assignedAt,
-        } : null,
-        resolvedAt: ticket.resolvedAt,
-        closedAt: ticket.closedAt,
-        closedBy: ticket.closedBy,
-        lastMessageAt: ticket.lastMessageAt,
-        updatedAt: ticket.updatedAt,
-      })),
+      tickets: tickets.map(ticket => {
+        const normalizedId = ticket._id?.toString?.() ?? ticket._id;
+        return {
+          id: normalizedId,
+          ticketId: normalizedId,
+          ticketNumber: ticket.ticketNumber,
+          displayName: ticket.customName || ticket.ticketNumber,
+          companyId: ticket.companyId,
+          companyName: ticket.companyName,
+          status: ticket.status,
+          priority: ticket.priority,
+          category: ticket.category,
+          createdBy: {
+            type: ticket.createdBy.type,
+            userEmail: ticket.createdBy.userEmail,
+            userName: ticket.createdBy.userName,
+            createdAt: ticket.createdAt,
+          },
+          assignedTo: ticket.assignedTo ? {
+            cfAdminEmail: ticket.assignedTo.cfAdminEmail,
+            cfAdminName: ticket.assignedTo.cfAdminName,
+            assignedAt: ticket.assignedTo.assignedAt,
+          } : null,
+          resolvedAt: ticket.resolvedAt,
+          closedAt: ticket.closedAt,
+          closedBy: ticket.closedBy,
+          lastMessageAt: ticket.lastMessageAt,
+          updatedAt: ticket.updatedAt,
+        };
+      }),
       pagination: {
         page,
         limit,

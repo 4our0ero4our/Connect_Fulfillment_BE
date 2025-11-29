@@ -3,6 +3,59 @@ import jwt, { JwtPayload } from 'jsonwebtoken';
 import axios from 'axios';
 
 const COMPANY_SERVICE_URL = process.env.COMPANY_SERVICE_URL || 'http://company-service:4004';
+const COMPANY_CACHE_TTL_MS = 60 * 1000; // cache verification responses for 1 minute
+
+type CachedCompany = {
+  company: any;
+  expiresAt: number;
+};
+
+const companyCache = new Map<string, CachedCompany>();
+
+const getCachedCompany = (apiKey: string): any | null => {
+  const cached = companyCache.get(apiKey);
+  if (!cached) {
+    return null;
+  }
+  if (cached.expiresAt < Date.now()) {
+    companyCache.delete(apiKey);
+    return null;
+  }
+  return cached.company;
+};
+
+const cacheCompany = (apiKey: string, company: any) => {
+  if (!company) {
+    return;
+  }
+  companyCache.set(apiKey, {
+    company,
+    expiresAt: Date.now() + COMPANY_CACHE_TTL_MS,
+  });
+};
+
+const fetchCompanyByApiKey = async (apiKey: string): Promise<any | null> => {
+  if (!apiKey) {
+    return null;
+  }
+
+  const cached = getCachedCompany(apiKey);
+  if (cached) {
+    return cached;
+  }
+
+  const response = await axios.get(`${COMPANY_SERVICE_URL}/verify-key`, {
+    headers: { 'your_company_api_key': apiKey },
+    timeout: 5000,
+  });
+
+  if (!response.data?.valid || !response.data?.company) {
+    return null;
+  }
+
+  cacheCompany(apiKey, response.data.company);
+  return response.data.company;
+};
 
 /**
  * Middleware to verify company admin JWT token.
@@ -26,19 +79,14 @@ export const verifyCompanyAdminToken = async (req: Request, res: Response, next:
 
     // Verify company exists and is verified
     try {
-      const response = await axios.get(`${COMPANY_SERVICE_URL}/verify-key`, {
-        headers: { 'your_company_api_key': decoded.companyApiKey },
-        timeout: 5000,
-      });
+      const company = await fetchCompanyByApiKey(decoded.companyApiKey);
 
-      if (!response.data?.valid || !response.data?.company) {
+      if (!company) {
         return res.status(403).json({
           message: 'Access denied',
           error: 'Company not found, not verified, or inactive'
         });
       }
-
-      const company = response.data.company;
 
       // Verify admin exists in company
       const adminExists = (company.companyAdminIDDetails || []).find(

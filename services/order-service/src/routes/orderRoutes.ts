@@ -168,7 +168,31 @@ router.post('/', verifyCompanyApiKey, verifyMerchant, async (req: Request, res: 
     });
 
     // Create audit log
-    const userInfo = extractUserInfo(res.locals);
+    let userInfo = extractUserInfo(res.locals);
+
+    // Try to extract more specific admin info from JWT if available
+    // This fixes the issue where manually created orders don't show the admin email
+    if (req.headers.authorization) {
+      try {
+        const token = req.headers.authorization.replace('Bearer ', '');
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET!);
+
+        if (decoded.companyAdminEmail || decoded.email) {
+          userInfo = {
+            performedBy: decoded.companyAdminEmail || decoded.email,
+            performedByRole: 'merchant_admin',
+            performedById: decoded.companyAdminId || decoded.id || decoded._id,
+            performedByName: decoded.companyAdminName || decoded.name,
+          };
+        }
+      } catch (error) {
+        // If token verification fails, just stick with the default userInfo (API key based)
+        // We don't want to fail the order creation just because of a token issue if the API key was valid
+        console.warn('Failed to extract admin info from token for audit log:', error);
+      }
+    }
+
     await createAuditLog({
       action: 'order_created',
       ...userInfo,
@@ -459,6 +483,43 @@ router.patch('/orders/:orderId/status', verifyAdminOrMerchant, verifyOrderAccess
       updatedAt: order.updatedAt,
     });
 
+    // Create audit log
+    let userInfo = extractUserInfo(res.locals);
+
+    // Try to extract more specific admin info from JWT if available
+    if (req.headers.authorization) {
+      try {
+        const token = req.headers.authorization.replace('Bearer ', '');
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET!);
+
+        if (decoded.companyAdminEmail || decoded.email) {
+          userInfo = {
+            performedBy: decoded.companyAdminEmail || decoded.email,
+            performedByRole: 'merchant_admin',
+            performedById: decoded.companyAdminId || decoded.id || decoded._id,
+            performedByName: decoded.companyAdminName || decoded.name,
+          };
+        }
+      } catch (error) {
+        console.warn('Failed to extract admin info from token for audit log:', error);
+      }
+    }
+
+    await createAuditLog({
+      action: 'order_status_updated',
+      ...userInfo,
+      targetCompany: order.companyId,
+      targetCompanyName: order.companyName,
+      targetOrder: order._id.toString(),
+      targetOrderNumber: order.orderNumber,
+      details: {
+        oldValue: { status: oldStatus },
+        newValue: { status: status },
+      },
+      service: 'order-service',
+    }, req);
+
     res.status(200).json({
       message: 'Order status updated successfully',
       order: {
@@ -508,7 +569,7 @@ router.delete('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, asyn
         error: 'The order you are looking for does not exist'
       });
     }
-    
+
     // Check if already deleted
     if (order.status === OrderStatus.DELETED) {
       return res.status(400).json({
@@ -524,11 +585,11 @@ router.delete('/orders/:orderId', verifyAdminOrMerchant, verifyOrderAccess, asyn
     await order.save();
 
     // Determine who deleted the order
-    const deletedBy = res.locals.isAdmin 
+    const deletedBy = res.locals.isAdmin
       ? { type: 'cf_admin' as const, email: res.locals.adminEmail, id: res.locals.adminId }
       : res.locals.isCompanyAdmin
-      ? { type: 'company_admin' as const, email: res.locals.companyAdminEmail, id: res.locals.companyAdminId }
-      : { type: 'merchant' as const };
+        ? { type: 'company_admin' as const, email: res.locals.companyAdminEmail, id: res.locals.companyAdminId }
+        : { type: 'merchant' as const };
 
     // Create audit log
     const userInfo = extractUserInfo(res.locals);
@@ -739,7 +800,7 @@ router.patch('/orders/:orderId/ticket/replace', verifyCFAdmin, async (req: Reque
     }
 
     const oldTicketId = order.ticketId;
-    
+
     if (!oldTicketId) {
       return res.status(400).json({
         message: 'Validation error',
@@ -1030,71 +1091,71 @@ import { verifyLeadCFAdmin } from '../middleware/orderAccessControl';
  * @returns {Object} 404 - Order not found
  */
 router.delete('/orders/:orderId/hard-delete', verifyLeadCFAdmin, async (req: Request, res: Response) => {
-	try {
-		const orderId = req.params.orderId;
-		const order = await Order.findById(orderId);
-		if (!order) {
-			return res.status(404).json({
-				message: 'Order not found',
-				error: 'The order you are trying to delete does not exist'
-			});
-		}
+  try {
+    const orderId = req.params.orderId;
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        message: 'Order not found',
+        error: 'The order you are trying to delete does not exist'
+      });
+    }
 
-		// Move order to deleted_orders collection with metadata
-		await DeletedOrder.create({
-			orderId: order._id.toString(),
-			orderNumber: order.orderNumber,
-			companyId: order.companyId,
-			companyApiKey: (order as any).companyApiKey,
-			companyName: order.companyName,
-			items: order.items,
-			customerInfo: order.customerInfo,
-			ticketId: order.ticketId,
-			statusBeforeDelete: order.status,
-			totalAmount: order.totalAmount,
-			currency: order.currency,
-			notes: order.notes,
-			createdAtOriginal: order.createdAt,
-			deletedAt: new Date(),
-			deletedBy: { adminEmail: res.locals.adminEmail, adminId: res.locals.adminId }
-		});
+    // Move order to deleted_orders collection with metadata
+    await DeletedOrder.create({
+      orderId: order._id.toString(),
+      orderNumber: order.orderNumber,
+      companyId: order.companyId,
+      companyApiKey: (order as any).companyApiKey,
+      companyName: order.companyName,
+      items: order.items,
+      customerInfo: order.customerInfo,
+      ticketId: order.ticketId,
+      statusBeforeDelete: order.status,
+      totalAmount: order.totalAmount,
+      currency: order.currency,
+      notes: order.notes,
+      createdAtOriginal: order.createdAt,
+      deletedAt: new Date(),
+      deletedBy: { adminEmail: res.locals.adminEmail, adminId: res.locals.adminId }
+    });
 
-		// Remove from orders collection
-		await Order.findByIdAndDelete(orderId);
+    // Remove from orders collection
+    await Order.findByIdAndDelete(orderId);
 
-		// Create audit log
-		const userInfo = extractUserInfo(res.locals);
-		await createAuditLog({
-			action: 'order_hard_deleted',
-			...userInfo,
-			targetCompany: order.companyId,
-			targetCompanyName: order.companyName,
-			targetOrder: order._id.toString(),
-			targetOrderNumber: order.orderNumber,
-			details: {
-				orderId: order._id.toString(),
-				orderNumber: order.orderNumber,
-				statusBeforeDelete: order.status,
-				customerEmail: order.customerInfo.customerEmail,
-				totalAmount: order.totalAmount,
-				currency: order.currency,
-				movedToDeletedOrders: true,
-			},
-			service: 'order-service',
-		}, req);
+    // Create audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'order_hard_deleted',
+      ...userInfo,
+      targetCompany: order.companyId,
+      targetCompanyName: order.companyName,
+      targetOrder: order._id.toString(),
+      targetOrderNumber: order.orderNumber,
+      details: {
+        orderId: order._id.toString(),
+        orderNumber: order.orderNumber,
+        statusBeforeDelete: order.status,
+        customerEmail: order.customerInfo.customerEmail,
+        totalAmount: order.totalAmount,
+        currency: order.currency,
+        movedToDeletedOrders: true,
+      },
+      service: 'order-service',
+    }, req);
 
-		return res.status(200).json({
-			message: 'Order hard-deleted successfully',
-			orderId: orderId,
-			orderNumber: order.orderNumber
-		});
-	} catch (error: any) {
-		console.error('Error hard-deleting order:', error);
-		return res.status(500).json({
-			message: 'Internal server error',
-			error: error?.message || 'An unknown error occurred'
-		});
-	}
+    return res.status(200).json({
+      message: 'Order hard-deleted successfully',
+      orderId: orderId,
+      orderNumber: order.orderNumber
+    });
+  } catch (error: any) {
+    console.error('Error hard-deleting order:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
 });
 
 export default router;

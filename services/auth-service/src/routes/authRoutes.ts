@@ -163,11 +163,8 @@ router.get('/', (_req: Request, res: Response) => {
  */
 router.post('/register', rateLimit(5, 60, 'register'), async (req: Request, res: Response) => {
   const startTime = Date.now();
-  console.log('🔄 Registration request received:', {
-    adminEmail: req.body?.adminEmail,
-    adminName: req.body?.adminName,
-    timestamp: new Date().toISOString()
-  });
+  // Log high-level event only – avoid logging PII like email, name, or password
+  console.log('🔄 Registration request received');
 
   try {
     const { adminName, adminEmail, password } = req.body;

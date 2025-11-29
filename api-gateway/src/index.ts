@@ -38,7 +38,6 @@ const authProxy: RequestHandler = createProxyMiddleware({
     });
   },
   onProxyReq: (proxyReq, req: any, res) => {
-    console.log(`[API Gateway] Proxying ${req.method} ${req.url} to auth-service`);
     // If body was parsed by any middleware, re-stream it to the target
     // DELETE requests can also have bodies (though not common, some APIs use them)
     if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE')) {
@@ -51,9 +50,6 @@ const authProxy: RequestHandler = createProxyMiddleware({
       proxyReq.end();
     }
   },
-  onProxyRes: (proxyRes, req, res) => {
-    console.log(`[API Gateway] Received response from auth-service: ${proxyRes.statusCode} for ${req.method} ${req.url}`);
-  },
   logLevel: 'warn'
 });
 const orderProxy: RequestHandler = createProxyMiddleware({ 
@@ -61,8 +57,6 @@ const orderProxy: RequestHandler = createProxyMiddleware({
   changeOrigin: true,
   pathRewrite: { '^/order': '' },
   onProxyReq: (proxyReq, req: any, res) => {
-    console.log(`[API Gateway] Proxying ${req.method} ${req.url} to order-service`);
-
     // Forward verified company headers when available
     if (req.headers['x-company-id']) {
       proxyReq.setHeader('x-company-id', req.headers['x-company-id']);
@@ -96,8 +90,6 @@ const ordersProxy: RequestHandler = createProxyMiddleware({
   changeOrigin: true,
   // Don't rewrite path - keep /orders as is
   onProxyReq: (proxyReq, req: any, res) => {
-    console.log(`[API Gateway] Proxying ${req.method} ${req.url} to order-service`);
-
     if (req.headers['x-company-id']) {
       proxyReq.setHeader('x-company-id', req.headers['x-company-id']);
     }
@@ -145,7 +137,6 @@ const companyProxy: RequestHandler = createProxyMiddleware({
     }
   },
   onProxyReq: (proxyReq, req: any, res) => {
-    console.log(`[API Gateway] Proxying ${req.method} ${req.url} to company-service`);
     // Forward headers that might be needed by company service
     if (req.headers['your_company_api_key']) {
       proxyReq.setHeader('your_company_api_key', req.headers['your_company_api_key']);
@@ -168,9 +159,6 @@ const companyProxy: RequestHandler = createProxyMiddleware({
       proxyReq.end();
     }
   },
-  onProxyRes: (proxyRes, req, res) => {
-    console.log(`[API Gateway] Received response from company-service: ${proxyRes.statusCode} for ${req.method} ${req.url}`);
-  },
   logLevel: 'warn'
 });
 const notificationProxy: RequestHandler = createProxyMiddleware({ 
@@ -183,7 +171,6 @@ const messagingProxy: RequestHandler = createProxyMiddleware({
   changeOrigin: true,
   pathRewrite: { '^/messaging': '' },
   onProxyReq: (proxyReq, req: any, res) => {
-    console.log(`[API Gateway] Proxying ${req.method} ${req.url} to messaging-service`);
     // Forward authorization header
     if (req.headers['authorization']) {
       proxyReq.setHeader('authorization', req.headers['authorization']);

@@ -37,7 +37,7 @@ const connectToMongoDB = async () => {
   try {
     console.log('🔄 Attempting to connect to MongoDB...');
     console.log('MongoDB URI:', mongoURI.replace(/\/\/.*@/, '//***:***@')); // Hide credentials in logs
-    
+
     await mongoose.connect(mongoURI, {
       serverSelectionTimeoutMS: 10000, // 10 seconds
       socketTimeoutMS: 45000, // 45 seconds
@@ -48,7 +48,7 @@ const connectToMongoDB = async () => {
       retryWrites: true,
       retryReads: true
     });
-    
+
     isConnected = true;
     isConnecting = false;
     console.log('✅ Connected to MongoDB successfully');
@@ -56,7 +56,7 @@ const connectToMongoDB = async () => {
     isConnected = false;
     isConnecting = false;
     console.error('❌ MongoDB connection error:', error.message);
-    
+
     // Only retry if not already connected and not currently connecting
     if (mongoose.connection.readyState === 0) {
       console.log('⚠️  Retrying MongoDB connection in 5 seconds...');
@@ -137,8 +137,8 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ 
-    status: isConnected ? 'ok' : 'degraded', 
+  res.json({
+    status: isConnected ? 'ok' : 'degraded',
     service: 'order-service',
     database: isConnected ? 'connected' : 'disconnected',
     timestamp: new Date().toISOString()
@@ -148,8 +148,30 @@ app.get('/health', (_req: Request, res: Response) => {
 app.use('/', orderRoutes);
 app.use('/', logRoutes);
 
+// Global error handler
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  console.error('❌ Unhandled error:', err);
+  res.status(500).json({
+    message: 'Internal server error',
+    error: err?.message || 'An unknown error occurred'
+  });
+});
+
 const PORT = process.env.PORT || 4002;
 app.listen(PORT, () => {
   console.log(`🚀 Order service listening on port ${PORT}`);
   console.log(`📊 Health check available at http://localhost:${PORT}/health`);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit the process, just log it
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  // Optional: Exit if the state is corrupted, but for now we'll keep running
+  // process.exit(1); 
 });

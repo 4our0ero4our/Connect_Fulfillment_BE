@@ -212,7 +212,7 @@ router.post('/register', async (req: Request, res: Response) => {
       });
     }
     const { companyName, companyEmail, companyAddress, companyPhone, companyWebsite, companyLogo, companyDescription, companyDetails, companyCategory, companySubCategory, deliveryTimeHours, serviceSchedule, orderDeletionSettings } = req.body;
-    
+
     // Validate deliveryTimeHours if provided
     if (deliveryTimeHours !== undefined) {
       if (typeof deliveryTimeHours !== 'number' || deliveryTimeHours < 0.5 || deliveryTimeHours > 168) {
@@ -239,7 +239,7 @@ router.post('/register', async (req: Request, res: Response) => {
         for (const day of days) {
           if (serviceSchedule.schedule[day]) {
             const daySchedule = serviceSchedule.schedule[day];
-            
+
             if (daySchedule.enabled !== undefined && typeof daySchedule.enabled !== 'boolean') {
               return res.status(400).json({
                 message: 'Validation error',
@@ -307,7 +307,7 @@ router.post('/register', async (req: Request, res: Response) => {
         }
       }
     }
-    
+
     // Force isVerified to false - companies cannot self-verify
     // Only CF Admins can verify companies via PATCH /company/:companyId/verify
 
@@ -325,16 +325,16 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // Prepare company data
     const companyData: any = {
-      companyName, 
-      companyEmail, 
-      companyAddress, 
-      companyPhone, 
-      companyWebsite, 
-      companyLogo, 
-      companyDescription, 
-      companyDetails, 
-      companyCategory, 
-      companySubCategory, 
+      companyName,
+      companyEmail,
+      companyAddress,
+      companyPhone,
+      companyWebsite,
+      companyLogo,
+      companyDescription,
+      companyDetails,
+      companyCategory,
+      companySubCategory,
       companyApiKey,
       isVerified: false, // Always false on registration!😤
       deliveryTimeHours: deliveryTimeHours || 2 // Default to 2 hours if not provided
@@ -401,11 +401,11 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
     const companyExists = await Company.findOne({
       companyAdminEmails: { $regex: new RegExp(`^${companyAdminEmail.toLowerCase()}$`, 'i') }
     });
-    
+
     if (!companyExists) {
       return res.status(404).json({ message: 'Company not found', error: 'No company found with this admin email. Please contact your company administrator to add your email to the company admin list.' });
     }
-    
+
     if (!companyExists.isVerified) {
       return res.status(401).json({ message: 'Company not verified', error: 'Company is not verified. Please wait for verification before registering.' });
     }
@@ -417,7 +417,7 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
     if (!adminEmailListed) {
       return res.status(409).json({ message: 'Admin not linked to this company', error: 'Company admin is not linked to this company' });
     }
-    
+
     // Checks if the admin already exists in the companyAdminIDDetails array in the Company model in the companyDB.
     const adminAlreadyExists = companyExists.companyAdminIDDetails.find(
       (admin: { companyAdminEmail: string }) => admin.companyAdminEmail.toLowerCase() === companyAdminEmail.toLowerCase()
@@ -442,13 +442,13 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
       { _id: companyExists._id },
       { $push: { companyAdminIDDetails: { companyAdminName, companyAdminEmail, companyAdminPassword: hashedPassword } } }
     );
-    
+
     // Also create a document in the CompanyAdmin collection for easy querying across all companies
     // Check if admin already exists in CompanyAdmin collection (shouldn't happen, but safety check)
-    const existingAdminInCollection = await CompanyAdmin.findOne({ 
-      companyAdminEmail: companyAdminEmail.toLowerCase() 
+    const existingAdminInCollection = await CompanyAdmin.findOne({
+      companyAdminEmail: companyAdminEmail.toLowerCase()
     });
-    
+
     if (!existingAdminInCollection) {
       await CompanyAdmin.create({
         companyId: companyExists._id.toString(),
@@ -458,7 +458,7 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
         companyAdminPassword: hashedPassword
       });
     }
-    
+
     // Create audit log
     await createAuditLog({
       action: 'company_admin_registered',
@@ -475,7 +475,7 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
       },
       service: 'company-service',
     }, req);
-    
+
     // Send welcome email notification
     try {
       await publishMerchantAdminRegistered({
@@ -491,7 +491,7 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
       // Log error but don't fail registration if email notification fails
       console.error(`⚠️ Failed to publish merchant_admin_registered event:`, error?.message || error);
     }
-    
+
     res.status(201).json({ message: 'Company admin registered successfully', companyAdminName, companyAdminEmail, companyAdminPassword: hashedPassword });
   } catch (error: any) {
     res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
@@ -518,7 +518,7 @@ router.post('/company-admin/register', async (req: Request, res: Response) => {
  */
 router.post('/company-admin/login', async (req: Request, res: Response) => {
   const startTime = Date.now();
-  
+
   try {
     const { companyAdminEmail, companyAdminPassword } = req.body;
     if (!companyAdminEmail || !companyAdminPassword) {
@@ -531,12 +531,13 @@ router.post('/company-admin/login', async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`[Login] Starting login attempt for email: ${companyAdminEmail}`);
-    
+    // Log high-level event only – avoid logging PII like email or password
+    console.log('[Login] Starting login attempt');
+
     // Find company by searching for the admin email in companyAdminIDDetails array
-    console.log(`[Login] Querying database for company with admin email...`);
+    console.log('[Login] Querying database for company with admin email...');
     const dbQueryStart = Date.now();
-    
+
     // Search for company that has this admin email in companyAdminIDDetails
     const companyExists = await Company.findOne({
       'companyAdminIDDetails.companyAdminEmail': { $regex: new RegExp(`^${companyAdminEmail.toLowerCase()}$`, 'i') }
@@ -544,45 +545,45 @@ router.post('/company-admin/login', async (req: Request, res: Response) => {
       .maxTimeMS(10000) // 10 second timeout for the query
       .lean()
       .exec();
-    
+
     console.log(`[Login] Database query took ${Date.now() - dbQueryStart}ms`);
-    
+
     if (!companyExists) {
-      console.log(`[Login] Company not found for admin email: ${companyAdminEmail}`);
+      console.log('[Login] Company not found for provided admin email');
       return res.status(401).json({ message: 'Invalid credentials', error: 'Company admin not found with this email' });
     }
-    
+
     if (!companyExists.isVerified) {
-      console.log(`[Login] Company not verified: ${companyExists.companyName}`);
+      console.log('[Login] Company not verified');
       return res.status(401).json({ message: 'Invalid credentials', error: 'Company is not verified' });
     }
-    
-    console.log(`[Login] Company found: ${companyExists.companyName}`);
-    
+
+    console.log('[Login] Company found for admin email');
+
     // Checks if the company admin exists in the companyAdminIDDetails array in the Company model in the companyDB.
     const passwordCheckStart = Date.now();
     const companyAdminExists = (companyExists.companyAdminIDDetails || []).find(
       (admin: { companyAdminEmail: string }) => admin.companyAdminEmail.toLowerCase() === companyAdminEmail.toLowerCase()
     );
-    
+
     if (!companyAdminExists) {
-      console.log(`[Login] Admin not found for email: ${companyAdminEmail}`);
+      console.log('[Login] Admin not found for provided email');
       return res.status(401).json({ message: 'Invalid credentials', error: 'Company admin not found with this email' });
     }
-    
-    console.log(`[Login] Admin found, verifying password...`);
-    
+
+    console.log('[Login] Admin found, verifying password...');
+
     // Verifies the company admin password (supports bcrypt and scrypt hashed values)
     const isPasswordValid = await verifyPassword(companyAdminPassword, companyAdminExists.companyAdminPassword);
     console.log(`[Login] Password verification took ${Date.now() - passwordCheckStart}ms`);
-    
+
     if (!isPasswordValid) {
-      console.log(`[Login] Invalid password`);
+      console.log('[Login] Invalid password');
       return res.status(401).json({ message: 'Invalid credentials', error: 'Incorrect password' });
     }
-    
-    console.log(`[Login] Password valid, generating token...`);
-    
+
+    console.log('[Login] Password valid, generating token...');
+
     // Generates JWT token with company information
     const token = jwt.sign(
       {
@@ -598,7 +599,7 @@ router.post('/company-admin/login', async (req: Request, res: Response) => {
       COMPANY_JWT_SECRET,
       { expiresIn: ACCESS_TOKEN_EXPIRES_IN_SECONDS }
     );
-    
+
     const refreshToken = createRefreshToken();
     await CompanyAdminSession.create({
       companyAdminEmail: companyAdminExists.companyAdminEmail.toLowerCase(),
@@ -613,21 +614,44 @@ router.post('/company-admin/login', async (req: Request, res: Response) => {
     setAuthCookies(res, token, refreshToken);
 
     console.log(`[Login] Login successful in ${Date.now() - startTime}ms`);
-    
-    res.status(200).json({ 
-      message: 'Login successful', 
-      token: token, 
-      companyAdmin: { 
-        companyAdminName: companyAdminExists.companyAdminName, 
-        companyAdminEmail: companyAdminExists.companyAdminEmail 
-      } 
+    console.log('[Login] Merchant admin session issued', {
+      companyName: companyExists.companyName,
+      companyAdminName: companyAdminExists.companyAdminName,
+      companyAdminEmail: companyAdminExists.companyAdminEmail.toLowerCase(),
+    });
+
+    // Create audit log
+    await createAuditLog({
+      action: 'login',
+      performedBy: companyAdminExists.companyAdminEmail.toLowerCase(),
+      performedByRole: 'merchant_admin',
+      performedById: (companyExists.companyAdminIDDetails || []).findIndex(
+        (admin: { companyAdminEmail: string }) => admin.companyAdminEmail.toLowerCase() === companyAdminEmail.toLowerCase()
+      ).toString(),
+      performedByName: companyAdminExists.companyAdminName,
+      targetCompany: companyExists._id.toString(),
+      targetCompanyName: companyExists.companyName,
+      details: {
+        loginAt: new Date().toISOString(),
+        ipAddress: req.ip
+      },
+      service: 'company-service',
+    }, req);
+
+    res.status(200).json({
+      message: 'Login successful',
+      token: token,
+      companyAdmin: {
+        companyAdminName: companyAdminExists.companyAdminName,
+        companyAdminEmail: companyAdminExists.companyAdminEmail
+      }
     });
   } catch (error: any) {
     console.error(`[Login] Error after ${Date.now() - startTime}ms:`, error);
     if (!res.headersSent) {
-      res.status(500).json({ 
-        message: 'Internal server error', 
-        error: error?.message || 'An unknown error occurred' 
+      res.status(500).json({
+        message: 'Internal server error',
+        error: error?.message || 'An unknown error occurred'
       });
     }
   }
@@ -718,6 +742,11 @@ router.post('/company-admin/refresh-token', async (req: Request, res: Response) 
     await session.save();
 
     setAuthCookies(res, token, newRefreshToken);
+    console.log('[Session] Merchant admin refresh issued', {
+      companyName: company.companyName,
+      companyAdminName: companyAdminExists.companyAdminName,
+      companyAdminEmail: companyAdminExists.companyAdminEmail.toLowerCase(),
+    });
 
     return res.status(200).json({
       message: 'Tokens refreshed successfully',
@@ -913,9 +942,9 @@ router.post('/company-admin/change-password', verifyCompanyAdminToken, async (re
 router.get('/companies-with-deletion-settings', async (req: Request, res: Response) => {
   try {
     // Verify internal service token if provided (optional for backward compatibility)
-    const internalToken = req.headers['x-internal-token'] || 
-                          req.headers['authorization']?.replace(/Bearer\s+/i, '') ||
-                          req.headers['x-service-secret'];
+    const internalToken = req.headers['x-internal-token'] ||
+      req.headers['authorization']?.replace(/Bearer\s+/i, '') ||
+      req.headers['x-service-secret'];
     const expectedToken = process.env.INTERNAL_SERVICE_TOKEN;
 
     if (expectedToken && internalToken !== expectedToken) {
@@ -999,8 +1028,58 @@ router.get('/verify-key', async (req: Request, res: Response) => {
 
   const companyExist = await Company.findOne({ companyApiKey: apiKey });
   if (!companyExist) return res.json({ valid: false, error: 'API key validation failed: Invalid Company API key' });
-  console.log('Company exists:', companyExist);
   res.json({ valid: true, company: companyExist });
+});
+
+/**
+ * Returns the current service status for a company.
+ *
+ * @route GET /service-status
+ * @access Private (requires company API key via gateway validation)
+ */
+router.get('/service-status', async (req: Request, res: Response) => {
+  try {
+    const apiKey = (req.headers['your_company_api_key'] as string)?.trim();
+
+    if (!apiKey) {
+      return res.status(400).json({
+        message: 'Company API key is required',
+        error: 'Please include your_company_api_key header'
+      });
+    }
+
+    const company = await Company.findOne({ companyApiKey: apiKey }).select(
+      'companyName companyEmail isVerified isActive isServiceActive apiKeyActive deliveryTimeHours updatedAt'
+    );
+
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Invalid Company API key'
+      });
+    }
+
+    res.status(200).json({
+      message: 'Service status retrieved successfully',
+      status: {
+        companyId: company._id,
+        companyName: company.companyName,
+        companyEmail: company.companyEmail,
+        isVerified: company.isVerified,
+        isActive: company.isActive,
+        isServiceActive: company.isServiceActive,
+        apiKeyActive: company.apiKeyActive,
+        deliveryTimeHours: company.deliveryTimeHours,
+        lastUpdatedAt: company.updatedAt
+      }
+    });
+  } catch (error: any) {
+    console.error('Error fetching service status:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
 });
 
 /**
@@ -1408,8 +1487,8 @@ router.delete('/company/company-admin', verifyCFAdminToken, async (req: Request,
     await company.save();
 
     // Also remove from CompanyAdmin collection
-    await CompanyAdmin.deleteOne({ 
-      companyAdminEmail: normalizedEmail 
+    await CompanyAdmin.deleteOne({
+      companyAdminEmail: normalizedEmail
     });
 
     // Create audit log
@@ -1531,7 +1610,7 @@ router.get('/company/onboarding/:token', async (req: Request, res: Response) => 
 router.patch('/company/service-status', verifyCompanyAdminToken, async (req: Request, res: Response) => {
   try {
     const { isServiceActive, reason } = req.body;
-    
+
     if (typeof isServiceActive !== 'boolean') {
       return res.status(400).json({
         message: 'Validation error',
@@ -1541,7 +1620,7 @@ router.patch('/company/service-status', verifyCompanyAdminToken, async (req: Req
 
     const companyId = res.locals.companyId;
     const company = await Company.findById(companyId);
-    
+
     if (!company) {
       return res.status(404).json({
         message: 'Company not found',
@@ -1583,7 +1662,7 @@ router.patch('/company/service-status', verifyCompanyAdminToken, async (req: Req
         id: company._id,
         companyName: company.companyName,
         isServiceActive: company.isServiceActive,
-        message: isServiceActive 
+        message: isServiceActive
           ? 'Your service is now active and accepting orders'
           : 'Your service is now inactive. Customers will be notified that you are not currently receiving orders.'
       }
@@ -1615,7 +1694,7 @@ router.get('/company/service-schedule', verifyCompanyAdminToken, async (req: Req
   try {
     const companyId = res.locals.companyId;
     const company = await Company.findById(companyId);
-    
+
     if (!company) {
       return res.status(404).json({
         message: 'Company not found',
@@ -1685,7 +1764,7 @@ router.patch('/company/service-schedule', verifyCompanyAdminToken, async (req: R
     const { enabled, schedule } = req.body;
     const companyId = res.locals.companyId;
     const company = await Company.findById(companyId);
-    
+
     if (!company) {
       return res.status(404).json({
         message: 'Company not found',
@@ -1717,7 +1796,7 @@ router.patch('/company/service-schedule', verifyCompanyAdminToken, async (req: R
       for (const day of days) {
         if (schedule[day]) {
           const daySchedule = schedule[day];
-          
+
           // Validate enabled field
           if (daySchedule.enabled !== undefined && typeof daySchedule.enabled !== 'boolean') {
             return res.status(400).json({
@@ -1761,7 +1840,7 @@ router.patch('/company/service-schedule', verifyCompanyAdminToken, async (req: R
 
     // Update service schedule
     const previousSchedule = company.serviceSchedule;
-    
+
     if (!company.serviceSchedule) {
       company.serviceSchedule = {
         enabled: false,
@@ -1848,7 +1927,7 @@ router.get('/company/deletion-settings', verifyCompanyAdminToken, async (req: Re
   try {
     const companyId = res.locals.companyId;
     const company = await Company.findById(companyId);
-    
+
     if (!company) {
       return res.status(404).json({
         message: 'Company not found',
@@ -1905,7 +1984,7 @@ router.patch('/company/deletion-settings', verifyCompanyAdminToken, async (req: 
     const { enabled, daysToDelete, deletionTime } = req.body;
     const companyId = res.locals.companyId;
     const company = await Company.findById(companyId);
-    
+
     if (!company) {
       return res.status(404).json({
         message: 'Company not found',

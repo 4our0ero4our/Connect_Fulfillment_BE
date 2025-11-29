@@ -40,6 +40,8 @@ export interface ICompany extends Document {
   onboardingTokenHash?: string | null;
   onboardingTokenExpiresAt?: Date | null;
   onboardingTokenUsedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const CompanySchema: Schema = new Schema<ICompany>(
