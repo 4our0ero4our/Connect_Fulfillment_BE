@@ -42,10 +42,8 @@ router.get('/logs', verifyAdminOrCompanyAdmin, async (req: Request, res: Respons
     // Service filter - default to company-service if not specified, but CF Admin can see all services
     if (req.query.service) {
       query.service = req.query.service;
-    } else if (res.locals.isCompanyAdmin) {
-      // Company Admin defaults to company-service only
-      query.service = 'company-service';
     }
+    // Removed restriction: Company Admin can see logs from any service as long as they match targetCompany or performedBy
     // CF Admin can see all services if no filter specified
 
     // Access control: Company Admin can only see their own logs or their company's logs

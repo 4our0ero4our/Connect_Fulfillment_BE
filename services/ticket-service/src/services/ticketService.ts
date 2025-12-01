@@ -101,6 +101,7 @@ const generateTicketId = () => {
 export const createTicket = async (payload: TicketPayload) => {
   let ticket = await Ticket.findOne({ orderId: payload.orderId });
   if (ticket) {
+    console.log(`ℹ Ticket already exists for order ${payload.orderId} (ticketId: ${ticket.ticketId}). Returning existing ticket to prevent duplicate.`);
     return ticket;
   }
 

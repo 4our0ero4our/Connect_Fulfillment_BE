@@ -984,6 +984,7 @@ router.get('/companies-with-deletion-settings', async (req: Request, res: Respon
  * Verify a company admin JWT token.
  * 
  * Validates a company admin token and returns the admin information if valid.
+ * Also attempts to include basic company information for convenience.
  * Useful for frontend token validation and session checks.
  * 
  * @route GET /company-admin/verify-token
@@ -991,7 +992,7 @@ router.get('/companies-with-deletion-settings', async (req: Request, res: Respon
  * 
  * @param {string} req.headers.authorization - Bearer token (JWT)
  * 
- * @returns {Object} 200 - Token verified with admin details
+ * @returns {Object} 200 - Token verified with admin and optional company details
  * @returns {Object} 401 - Invalid or expired token
  */
 router.get('/company-admin/verify-token', async (req: Request, res: Response) => {
@@ -1001,7 +1002,37 @@ router.get('/company-admin/verify-token', async (req: Request, res: Response) =>
       return res.status(401).json({ message: 'Unauthorized', error: 'No token provided' });
     }
     const decoded = jwt.verify(token, COMPANY_JWT_SECRET) as JwtPayload;
-    res.status(200).json({ message: 'Token verified', companyAdmin: { companyAdminName: decoded.companyAdminName, companyAdminEmail: decoded.companyAdminEmail } });
+
+    let companyInfo: any = null;
+    if (decoded.companyId) {
+      const company = await Company.findById(decoded.companyId).select(
+        'companyName companyEmail isVerified isActive isServiceActive apiKeyActive deliveryTimeHours'
+      );
+      if (company) {
+        companyInfo = {
+          companyId: company._id.toString(),
+          companyName: company.companyName,
+          companyEmail: company.companyEmail,
+          isVerified: company.isVerified,
+          isActive: company.isActive,
+          isServiceActive: company.isServiceActive,
+          apiKeyActive: company.apiKeyActive,
+          deliveryTimeHours: company.deliveryTimeHours,
+        };
+      }
+    }
+
+    res.status(200).json({
+      message: 'Token verified',
+      companyAdmin: {
+        companyAdminName: decoded.companyAdminName,
+        companyAdminEmail: decoded.companyAdminEmail,
+      },
+      company: companyInfo,
+      // For convenience / backwards compatibility
+      companyId: companyInfo?.companyId || decoded.companyId,
+      companyName: companyInfo?.companyName,
+    });
   } catch (error: any) {
     return res.status(401).json({ message: 'Unauthorized', error: 'Invalid token' });
   }
@@ -1078,6 +1109,337 @@ router.get('/service-status', async (req: Request, res: Response) => {
     return res.status(500).json({
       message: 'Internal server error',
       error: error?.message || 'An unknown error occurred'
+    });
+  }
+});
+
+/**
+ * Update service status for the current company (merchant admin).
+ *
+ * Allows a merchant admin to toggle whether their company is currently
+ * accepting orders and to update the default delivery time.
+ *
+ * @route PATCH /service-status
+ * @access Private (requires Company Admin JWT token via gateway)
+ *
+ * @param {boolean} [req.body.isServiceActive] - Whether the company is currently accepting orders
+ * @param {number}  [req.body.deliveryTimeHours] - Default fulfillment time in hours
+ *
+ * @returns {Object} 200 - Updated service status
+ * @returns {Object} 400 - Validation error
+ */
+router.patch('/service-status', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { isServiceActive, deliveryTimeHours } = req.body || {};
+
+    if (typeof isServiceActive !== 'boolean' && typeof deliveryTimeHours !== 'number') {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'At least one of isServiceActive (boolean) or deliveryTimeHours (number) is required',
+      });
+    }
+
+    const companyId = res.locals.companyId;
+    const company = await Company.findById(companyId);
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system',
+      });
+    }
+
+    const previous = {
+      isServiceActive: company.isServiceActive,
+      deliveryTimeHours: company.deliveryTimeHours,
+    };
+
+    if (typeof isServiceActive === 'boolean') {
+      company.isServiceActive = isServiceActive;
+    }
+    if (typeof deliveryTimeHours === 'number') {
+      company.deliveryTimeHours = deliveryTimeHours;
+    }
+
+    await company.save();
+
+    // Audit log
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'company_service_status_updated',
+      ...userInfo,
+      targetCompany: company._id.toString(),
+      targetCompanyName: company.companyName,
+      details: {
+        previous,
+        updated: {
+          isServiceActive: company.isServiceActive,
+          deliveryTimeHours: company.deliveryTimeHours,
+        },
+      },
+      service: 'company-service',
+    }, req);
+
+    return res.status(200).json({
+      message: 'Service status updated successfully',
+      status: {
+        companyId: company._id,
+        companyName: company.companyName,
+        companyEmail: company.companyEmail,
+        isVerified: company.isVerified,
+        isActive: company.isActive,
+        isServiceActive: company.isServiceActive,
+        apiKeyActive: company.apiKeyActive,
+        deliveryTimeHours: company.deliveryTimeHours,
+        lastUpdatedAt: company.updatedAt,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error updating service status:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred',
+    });
+  }
+});
+
+/**
+ * Get order auto-deletion settings for the current company (merchant admin).
+ *
+ * @route GET /deletion-settings
+ * @access Private (requires Company Admin JWT token via gateway)
+ *
+ * @returns {Object} 200 - Current deletion settings
+ */
+router.get('/deletion-settings', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const companyId = res.locals.companyId;
+    const company = await Company.findById(companyId).select('orderDeletionSettings');
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system',
+      });
+    }
+
+    const settings = company.orderDeletionSettings || {
+      enabled: false,
+      daysToDelete: 3,
+      deletionTime: '21:00',
+    };
+
+    return res.status(200).json({
+      message: 'Order deletion settings retrieved successfully',
+      orderDeletionSettings: settings,
+    });
+  } catch (error: any) {
+    console.error('Error fetching deletion settings:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred',
+    });
+  }
+});
+
+/**
+ * Update order auto-deletion settings for the current company (merchant admin).
+ *
+ * @route PATCH /deletion-settings
+ * @access Private (requires Company Admin JWT token via gateway)
+ *
+ * @param {boolean} req.body.enabled - Whether automatic deletion is enabled
+ * @param {number}  req.body.daysToDelete - Number of days after which uncompleted orders are deleted
+ * @param {string}  [req.body.deletionTime] - Time of day to run deletion (HH:mm, 24h)
+ *
+ * @returns {Object} 200 - Updated settings
+ * @returns {Object} 400 - Validation error
+ */
+router.patch('/deletion-settings', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { enabled, daysToDelete, deletionTime } = req.body || {};
+
+    if (typeof enabled !== 'boolean' || typeof daysToDelete !== 'number') {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'enabled (boolean) and daysToDelete (number) are required',
+      });
+    }
+
+    if (daysToDelete < 1) {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'daysToDelete must be at least 1',
+      });
+    }
+
+    if (deletionTime && !/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(deletionTime)) {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'deletionTime must be in HH:mm 24-hour format',
+      });
+    }
+
+    const companyId = res.locals.companyId;
+    const company = await Company.findById(companyId);
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system',
+      });
+    }
+
+    const previous = company.orderDeletionSettings ?? {
+      enabled: false,
+      daysToDelete: 3,
+      deletionTime: '21:00',
+    };
+
+    company.orderDeletionSettings = {
+      enabled,
+      daysToDelete,
+      deletionTime: deletionTime || previous.deletionTime || '21:00',
+    };
+
+    await company.save();
+
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'order_deletion_settings_updated',
+      ...userInfo,
+      targetCompany: company._id.toString(),
+      targetCompanyName: company.companyName,
+      details: {
+        previous,
+        updated: company.orderDeletionSettings,
+      },
+      service: 'company-service',
+    }, req);
+
+    return res.status(200).json({
+      message: 'Order deletion settings updated successfully',
+      orderDeletionSettings: company.orderDeletionSettings,
+    });
+  } catch (error: any) {
+    console.error('Error updating deletion settings:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred',
+    });
+  }
+});
+
+const buildDefaultServiceSchedule = () => ({
+  enabled: false,
+  schedule: {
+    monday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+    tuesday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+    wednesday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+    thursday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+    friday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+    saturday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+    sunday: { enabled: false, startTime: '09:00', endTime: '17:00' },
+  },
+});
+
+/**
+ * Get service schedule for the current company (merchant admin).
+ *
+ * @route GET /service-schedule
+ * @access Private (requires Company Admin JWT token via gateway)
+ *
+ * @returns {Object} 200 - Current service schedule
+ */
+router.get('/service-schedule', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const companyId = res.locals.companyId;
+    const company = await Company.findById(companyId).select('serviceSchedule');
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system',
+      });
+    }
+
+    const schedule = company.serviceSchedule || buildDefaultServiceSchedule();
+
+    return res.status(200).json({
+      message: 'Service schedule retrieved successfully',
+      serviceSchedule: schedule,
+    });
+  } catch (error: any) {
+    console.error('Error fetching service schedule:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred',
+    });
+  }
+});
+
+/**
+ * Update service schedule for the current company (merchant admin).
+ *
+ * @route PATCH /service-schedule
+ * @access Private (requires Company Admin JWT token via gateway)
+ *
+ * @param {boolean} req.body.enabled - Whether schedule-based availability is enabled
+ * @param {Object}  req.body.schedule - Per-day schedule configuration
+ *
+ * @returns {Object} 200 - Updated service schedule
+ * @returns {Object} 400 - Validation error
+ */
+router.patch('/service-schedule', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { enabled, schedule } = req.body || {};
+
+    if (typeof enabled !== 'boolean' || typeof schedule !== 'object' || !schedule) {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'enabled (boolean) and schedule (object) are required',
+      });
+    }
+
+    const companyId = res.locals.companyId;
+    const company = await Company.findById(companyId);
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system',
+      });
+    }
+
+    const previous = company.serviceSchedule || buildDefaultServiceSchedule();
+
+    company.serviceSchedule = {
+      enabled,
+      schedule: {
+        ...previous.schedule,
+        ...schedule,
+      },
+    };
+
+    await company.save();
+
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'service_schedule_updated',
+      ...userInfo,
+      targetCompany: company._id.toString(),
+      targetCompanyName: company.companyName,
+      details: {
+        previous,
+        updated: company.serviceSchedule,
+      },
+      service: 'company-service',
+    }, req);
+
+    return res.status(200).json({
+      message: 'Service schedule updated successfully',
+      serviceSchedule: company.serviceSchedule,
+    });
+  } catch (error: any) {
+    console.error('Error updating service schedule:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred',
     });
   }
 });
@@ -1370,6 +1732,122 @@ router.patch('/company/:companyId/api-key/status', verifyCFAdminToken, async (re
   } catch (error: any) {
     console.error('Error updating API key status:', error);
     return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
+
+/**
+ * Bulk toggle API key status (active/inactive) for multiple companies.
+ *
+ * Allows CF Admins to enable/disable API keys for many companies in one request.
+ * For each company:
+ * - Updates `apiKeyActive`
+ * - Writes an audit log entry
+ * - Publishes `company_api_key_status_changed` event when status actually changes
+ *
+ * @route PATCH /company/api-key/status/bulk
+ * @access Private (requires CF Admin JWT token)
+ *
+ * @param {Array<{ companyId: string; active: boolean }>} req.body.companies - List of companies and desired API key status
+ *
+ * @returns {Object} 200 - Summary of updates with per-company results
+ * @returns {Object} 400 - Validation error (missing/invalid payload)
+ */
+router.patch('/company/api-key/status/bulk', verifyCFAdminToken, async (req: Request, res: Response) => {
+  try {
+    const { companies } = req.body || {};
+
+    if (!Array.isArray(companies) || companies.length === 0) {
+      return res.status(400).json({
+        message: 'Invalid payload',
+        error: 'companies must be a non-empty array of { companyId, active }',
+      });
+    }
+
+    const userInfo = extractUserInfo(res.locals);
+    const results: Array<{
+      companyId: string;
+      success: boolean;
+      message: string;
+    }> = [];
+
+    for (const item of companies) {
+      const { companyId, active } = item || {};
+
+      if (!companyId || typeof active !== 'boolean') {
+        results.push({
+          companyId: companyId || 'unknown',
+          success: false,
+          message: 'companyId and boolean active are required',
+        });
+        continue;
+      }
+
+      try {
+        const company = await Company.findById(companyId);
+        if (!company) {
+          results.push({
+            companyId,
+            success: false,
+            message: 'Company not found',
+          });
+          continue;
+        }
+
+        const previous = company.apiKeyActive;
+        company.apiKeyActive = active;
+        await company.save();
+
+        // Audit log
+        await createAuditLog({
+          action: 'company_api_key_status_changed',
+          ...userInfo,
+          targetCompany: company._id.toString(),
+          targetCompanyName: company.companyName,
+          details: {
+            oldValue: previous,
+            newValue: active,
+            status: active ? 'active' : 'inactive',
+            bulkOperation: true,
+          },
+          service: 'company-service',
+        }, req);
+
+        // Kafka event only if there was a real change
+        if (previous !== active) {
+          await publishCompanyApiKeyStatusChanged({
+            companyId: company._id.toString(),
+            companyName: company.companyName,
+            companyEmail: company.companyEmail,
+            status: active ? 'active' : 'inactive',
+            changerEmail: req.body.adminEmail || userInfo.performedBy,
+          });
+        }
+
+        results.push({
+          companyId,
+          success: true,
+          message: `API key status updated to ${active ? 'active' : 'inactive'}`,
+        });
+      } catch (err: any) {
+        console.error('Error updating API key status in bulk for company', companyId, err?.message || err);
+        results.push({
+          companyId,
+          success: false,
+          message: err?.message || 'Internal error while updating this company',
+        });
+      }
+    }
+
+    return res.status(200).json({
+      message: 'Bulk API key status update completed',
+      results,
+    });
+  } catch (error: any) {
+    console.error('Error in bulk API key status update:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred',
+    });
   }
 });
 

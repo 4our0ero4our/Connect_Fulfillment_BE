@@ -211,6 +211,8 @@ router.post('/tickets', verifyAdminOrMerchant, async (req: Request, res: Respons
 
     // Create audit log
     const userInfo = extractUserInfo(res.locals);
+    console.log(`[Ticket Created] Creating audit log. Company ID: ${companyId}, User: ${userInfo.performedBy}`);
+
     await createAuditLog({
       action: 'support_ticket_created',
       ...userInfo,

@@ -12,7 +12,7 @@ export interface IAuditLog extends Document {
   performedByRole: 'cf_admin' | 'merchant_admin' | 'system'; // Role of the performer
   performedById?: string; // ID of the user (optional, for reference)
   performedByName?: string; // Name of the user (optional, for display)
-  
+
   // Target entity information (optional, depends on action)
   targetCompany?: string; // Company ID if action affects a company
   targetCompanyName?: string; // Company name for display
@@ -21,7 +21,7 @@ export interface IAuditLog extends Document {
   targetTicket?: string; // Ticket ID if action affects a ticket
   targetAdmin?: string; // Admin email if action affects an admin
   targetStaff?: string; // Staff email if action affects staff
-  
+
   // Action details
   details: {
     // Action-specific data (flexible object)
@@ -30,7 +30,7 @@ export interface IAuditLog extends Document {
     reason?: string;
     [key: string]: any; // Allow additional fields
   };
-  
+
   // Metadata
   timestamp: Date; // Exact date and time of the action
   ipAddress?: string; // IP address of the requester (optional)
@@ -142,5 +142,30 @@ AuditLogSchema.pre('findOneAndDelete', function () {
   throw new Error('Audit logs cannot be deleted');
 });
 
-export const AuditLog = mongoose.model<IAuditLog>('AuditLog', AuditLogSchema);
+// Create a separate connection for AdminDB to ensure all services write audit logs to the same place
+const getAdminDBUri = (): string => {
+  const adminMongoUri = process.env.ADMIN_MONGO_URI;
+  if (adminMongoUri) {
+    return adminMongoUri;
+  }
+  // Fallback logic to derive AdminDB URI from MONGO_URI
+  const defaultUri = process.env.MONGO_URI || 'mongodb://localhost:27017/OrderDB';
+  if (defaultUri.includes('?')) {
+    const parts = defaultUri.split('?');
+    const base = parts[0];
+    const query = parts[1];
+    const lastSlash = base.lastIndexOf('/');
+    return base.substring(0, lastSlash + 1) + 'AdminDB?' + query;
+  } else {
+    const lastSlash = defaultUri.lastIndexOf('/');
+    return defaultUri.substring(0, lastSlash + 1) + 'AdminDB';
+  }
+};
+
+const adminDBConnection = mongoose.createConnection(getAdminDBUri(), {
+  serverSelectionTimeoutMS: 10000,
+  socketTimeoutMS: 45000,
+});
+
+export const AuditLog = adminDBConnection.model<IAuditLog>('AuditLog', AuditLogSchema);
 

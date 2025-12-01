@@ -116,5 +116,30 @@ AuditLogSchema.pre('findOneAndDelete', function () {
   throw new Error('Audit logs cannot be deleted');
 });
 
-export const AuditLog = mongoose.model<IAuditLog>('AuditLog', AuditLogSchema);
+// Create a separate connection for AdminDB to ensure all services write audit logs to the same place
+const getAdminDBUri = (): string => {
+  const adminMongoUri = process.env.ADMIN_MONGO_URI;
+  if (adminMongoUri) {
+    return adminMongoUri;
+  }
+  // Fallback logic to derive AdminDB URI from MONGO_URI
+  const defaultUri = process.env.MONGO_URI || 'mongodb://localhost:27017/MessagingDB';
+  if (defaultUri.includes('?')) {
+    const parts = defaultUri.split('?');
+    const base = parts[0];
+    const query = parts[1];
+    const lastSlash = base.lastIndexOf('/');
+    return base.substring(0, lastSlash + 1) + 'AdminDB?' + query;
+  } else {
+    const lastSlash = defaultUri.lastIndexOf('/');
+    return defaultUri.substring(0, lastSlash + 1) + 'AdminDB';
+  }
+};
+
+const adminDBConnection = mongoose.createConnection(getAdminDBUri(), {
+  serverSelectionTimeoutMS: 10000,
+  socketTimeoutMS: 45000,
+});
+
+export const AuditLog = adminDBConnection.model<IAuditLog>('AuditLog', AuditLogSchema);
 
