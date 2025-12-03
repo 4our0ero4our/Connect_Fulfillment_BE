@@ -1069,6 +1069,227 @@ router.post('/orders/customer', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Get current month revenue metrics (CF Admin only).
+ * 
+ * Returns the total revenue from all orders created in the current month.
+ * This endpoint is restricted to Connect Fulfillment platform admins only.
+ * 
+ * @route GET /orders/metrics/current-month
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @returns {Object} 200 - Current month revenue metrics
+ * @returns {Object} 403 - Access denied (not a CF Admin)
+ */
+router.get('/orders/metrics/current-month', verifyCFAdmin, async (req: Request, res: Response) => {
+  try {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    // Aggregate revenue for current month
+    const result = await Order.aggregate([
+      {
+        $match: {
+          createdAt: {
+            $gte: startOfMonth,
+            $lte: endOfMonth
+          }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$totalAmount' },
+          totalOrders: { $sum: 1 },
+          averageOrderValue: { $avg: '$totalAmount' }
+        }
+      }
+    ]);
+
+    const metrics = result[0] || {
+      totalRevenue: 0,
+      totalOrders: 0,
+      averageOrderValue: 0
+    };
+
+    res.status(200).json({
+      message: 'Current month revenue metrics retrieved successfully',
+      metrics: {
+        totalRevenue: metrics.totalRevenue,
+        totalOrders: metrics.totalOrders,
+        averageOrderValue: Math.round(metrics.averageOrderValue * 100) / 100,
+        currency: 'NGN',
+        period: {
+          type: 'current-month',
+          month: now.getMonth() + 1,
+          year: now.getFullYear(),
+          startDate: startOfMonth.toISOString(),
+          endDate: endOfMonth.toISOString()
+        },
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (error: any) {
+    console.error('Error retrieving current month revenue metrics:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
+});
+
+/**
+ * Get revenue metrics for a specific month (CF Admin only).
+ * 
+ * Returns the total revenue from all orders created in the specified month.
+ * Month should be provided as year and month (e.g., /orders/metrics/2025/01 for January 2025).
+ * This endpoint is restricted to Connect Fulfillment platform admins only.
+ * 
+ * @route GET /orders/metrics/:year/:month
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @param {string} req.params.year - Year (e.g., "2025")
+ * @param {string} req.params.month - Month (1-12, e.g., "01" or "1")
+ * 
+ * @returns {Object} 200 - Month revenue metrics
+ * @returns {Object} 400 - Validation error (invalid year or month)
+ * @returns {Object} 403 - Access denied (not a CF Admin)
+ */
+router.get('/orders/metrics/:year/:month', verifyCFAdmin, async (req: Request, res: Response) => {
+  try {
+    const year = parseInt(req.params.year);
+    const month = parseInt(req.params.month);
+
+    // Validation
+    if (isNaN(year) || year < 2000 || year > 2100) {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'Invalid year. Year must be between 2000 and 2100'
+      });
+    }
+
+    if (isNaN(month) || month < 1 || month > 12) {
+      return res.status(400).json({
+        message: 'Validation error',
+        error: 'Invalid month. Month must be between 1 and 12'
+      });
+    }
+
+    // Calculate start and end of the specified month
+    const startOfMonth = new Date(year, month - 1, 1);
+    const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+
+    // Aggregate revenue for the specified month
+    const result = await Order.aggregate([
+      {
+        $match: {
+          createdAt: {
+            $gte: startOfMonth,
+            $lte: endOfMonth
+          }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$totalAmount' },
+          totalOrders: { $sum: 1 },
+          averageOrderValue: { $avg: '$totalAmount' }
+        }
+      }
+    ]);
+
+    const metrics = result[0] || {
+      totalRevenue: 0,
+      totalOrders: 0,
+      averageOrderValue: 0
+    };
+
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+
+    res.status(200).json({
+      message: 'Month revenue metrics retrieved successfully',
+      metrics: {
+        totalRevenue: metrics.totalRevenue,
+        totalOrders: metrics.totalOrders,
+        averageOrderValue: Math.round(metrics.averageOrderValue * 100) / 100,
+        currency: 'NGN',
+        period: {
+          type: 'specific-month',
+          month: month,
+          monthName: monthNames[month - 1],
+          year: year,
+          startDate: startOfMonth.toISOString(),
+          endDate: endOfMonth.toISOString()
+        },
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (error: any) {
+    console.error('Error retrieving month revenue metrics:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
+});
+
+/**
+ * Get total revenue metrics (CF Admin only).
+ * 
+ * Returns the total revenue from all orders that have been created.
+ * This endpoint is restricted to Connect Fulfillment platform admins only.
+ * 
+ * @route GET /orders/metrics
+ * @access Private (requires CF Admin JWT token)
+ * 
+ * @returns {Object} 200 - Total revenue metrics
+ * @returns {Object} 403 - Access denied (not a CF Admin)
+ */
+router.get('/orders/metrics', verifyCFAdmin, async (req: Request, res: Response) => {
+  try {
+    // Aggregate total revenue from all orders
+    const result = await Order.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$totalAmount' },
+          totalOrders: { $sum: 1 },
+          averageOrderValue: { $avg: '$totalAmount' }
+        }
+      }
+    ]);
+
+    const metrics = result[0] || {
+      totalRevenue: 0,
+      totalOrders: 0,
+      averageOrderValue: 0
+    };
+
+    res.status(200).json({
+      message: 'Revenue metrics retrieved successfully',
+      metrics: {
+        totalRevenue: metrics.totalRevenue,
+        totalOrders: metrics.totalOrders,
+        averageOrderValue: Math.round(metrics.averageOrderValue * 100) / 100,
+        currency: 'NGN', // Default currency, you might want to aggregate by currency
+        period: 'all-time',
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (error: any) {
+    console.error('Error retrieving revenue metrics:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
+});
+
 // ✅ Working perfectly
 import { DeletedOrder } from '../models/DeletedOrder';
 import { verifyLeadCFAdmin } from '../middleware/orderAccessControl';
