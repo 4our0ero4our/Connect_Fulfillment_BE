@@ -121,11 +121,18 @@ export const verifyCompanyAdmin = async (req: Request, res: Response, next: Next
           });
         }
         
-        // Verify company is verified
+        // Verify company is verified and active
         if (!company.isVerified) {
           return res.status(403).json({
             message: 'Access denied',
             error: 'Company is not verified. Please contact Connect Fulfillment support.'
+          });
+        }
+        
+        if (!company.isActive) {
+          return res.status(403).json({
+            message: 'Access denied',
+            error: 'Company account is deactivated. Please contact Connect Fulfillment support.'
           });
         }
         
@@ -191,11 +198,18 @@ export const verifyCompanyAdmin = async (req: Request, res: Response, next: Next
         });
       }
       
-      // Verify company is verified
+      // Verify company is verified and active
       if (!company.isVerified) {
         return res.status(403).json({
           message: 'Access denied',
           error: 'Company is not verified. Please contact Connect Fulfillment support.'
+        });
+      }
+      
+      if (!company.isActive) {
+        return res.status(403).json({
+          message: 'Access denied',
+          error: 'Company account is deactivated. Please contact Connect Fulfillment support.'
         });
       }
       

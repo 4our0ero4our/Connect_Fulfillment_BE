@@ -365,9 +365,9 @@ export const verifyAdminOrMerchant = async (req: Request, res: Response, next: N
               if (response.data?.valid && response.data?.company) {
                 company = response.data.company;
                 
-                // Verify company ID matches
+                // Verify company ID matches and company is verified and active
                 const companyIdStr = company._id?.toString() || company.id?.toString();
-                if (companyIdStr === companyId && company.isVerified) {
+                if (companyIdStr === companyId && company.isVerified && company.isActive) {
                   // Check if the company admin email exists in companyAdminIDDetails
                   if (company.companyAdminIDDetails && Array.isArray(company.companyAdminIDDetails)) {
                     const adminExists = company.companyAdminIDDetails.find(

@@ -82,6 +82,21 @@ export const verifyCompanyApiKey = async (req: Request, res: Response, next: Nex
 
     const company = response.data.company;
 
+    // Verify company is verified and active
+    if (!company.isVerified) {
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Company is not verified. Please contact Connect Fulfillment support.'
+      });
+    }
+
+    if (!company.isActive) {
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Company account is deactivated. Please contact Connect Fulfillment support.'
+      });
+    }
+
     res.locals.company = company;
     res.locals.companyId = company._id?.toString() || company.id?.toString();
     res.locals.companyApiKey = company.companyApiKey;

@@ -15,6 +15,7 @@ import {
   publishMerchantAdminRegistered,
   publishCompanyAdminRemoved,
   publishCompanyApiKeyStatusChanged,
+  publishCompanyApiKeyRotated,
   publishCompanyStatusChanged,
   publishCompanyVerified
 } from '../utils/kafkaPublisher';
@@ -133,6 +134,14 @@ const generateOnboardingToken = () => crypto.randomBytes(48).toString('hex');
  * @returns {string} SHA-256 hash of the token
  */
 const hashToken = (token: string) => crypto.createHash('sha256').update(token).digest('hex');
+
+/**
+ * Generates a strong random API key for companies.
+ * Prefixed with "FFM_" and uses 48 bytes of random data encoded as base64url (~64 chars total).
+ *
+ * @returns {string} Newly generated API key
+ */
+const generateApiKey = () => `FFM_${crypto.randomBytes(48).toString('base64url')}`; // ~64 chars
 
 /**
  * Masks an API key for display purposes, showing only first and last few characters.
@@ -658,10 +667,75 @@ router.post('/company-admin/login', async (req: Request, res: Response) => {
 })
 
 /**
+ * Get full details for a specific company (CF Admin only).
+ *
+ * Returns all core company fields including API key info, service status,
+ * schedule, deletion settings and delivery time so CF admins can view and
+ * manage a single merchant from the admin dashboard.
+ *
+ * @route GET /company/:companyId
+ * @access Private (requires CF Admin JWT token)
+ *
+ * @param {string} req.params.companyId - MongoDB ObjectId of the company
+ *
+ * @returns {Object} 200 - Full company details
+ * @returns {Object} 404 - Company not found
+ */
+router.get('/company/:companyId', verifyCFAdminToken, async (req: Request, res: Response) => {
+  try {
+    const company = await Company.findById(req.params.companyId);
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'No company exists with the provided ID',
+      });
+    }
+
+    const companyObj = company.toObject();
+    const adminCount = (companyObj.companyAdminEmails || []).length;
+
+    return res.status(200).json({
+      message: 'Company details retrieved successfully',
+      company: {
+        id: companyObj._id,
+        companyName: companyObj.companyName,
+        companyEmail: companyObj.companyEmail,
+        companyAddress: companyObj.companyAddress,
+        companyPhone: companyObj.companyPhone,
+        companyWebsite: companyObj.companyWebsite,
+        companyLogo: companyObj.companyLogo,
+        companyDescription: companyObj.companyDescription,
+        companyDetails: companyObj.companyDetails,
+        companyCategory: companyObj.companyCategory,
+        companySubCategory: companyObj.companySubCategory,
+        isVerified: companyObj.isVerified,
+        isActive: companyObj.isActive,
+        isServiceActive: companyObj.isServiceActive,
+        apiKeyActive: companyObj.apiKeyActive,
+        deliveryTimeHours: companyObj.deliveryTimeHours,
+        serviceSchedule: companyObj.serviceSchedule ?? null,
+        orderDeletionSettings: companyObj.orderDeletionSettings ?? null,
+        companyApiKey: companyObj.companyApiKey || null,
+        companyApiKeyMasked: maskApiKey(companyObj.companyApiKey),
+        adminCount,
+        createdAt: companyObj.createdAt,
+        updatedAt: companyObj.updatedAt,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error fetching company details:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred',
+    });
+  }
+});
+
+/**
  * Get all registered companies (CF Admin only).
  * 
  * Returns a list of all company names in the system. Only CF Admins can
- * access this endpoint. For full company details, use other admin endpoints.
+ * access this endpoint. For full company details, use the GET /company/:companyId endpoint.
  * 
  * @route GET /companies
  * @access Private (requires CF Admin JWT token)
@@ -669,7 +743,6 @@ router.post('/company-admin/login', async (req: Request, res: Response) => {
  * @returns {Object} 200 - List of all company names
  */
 router.get('/companies', verifyCFAdminToken, async (_req: Request, res: Response) => {
-  // if (!req.body.company) return res.status(401).json({ message: 'Unauthorized' });
   const companyNames = await Company.find({}, 'companyName');
   res.status(200).json({ companyNames });
 });
@@ -1666,6 +1739,89 @@ router.patch('/company/:companyId/verify', verifyCFAdminToken, async (req: Reque
 });
 
 /**
+ * Rotate a company's API key (CF Admin only).
+ *
+ * Generates a brand new API key for the company, activates it, and returns the
+ * new key along with masked versions for display. Previous key is replaced and
+ * can no longer be used. This is useful when a key is suspected to be leaked.
+ *
+ * @route POST /company/:companyId/api-key/rotate
+ * @access Private (requires CF Admin JWT token)
+ *
+ * @param {string} req.params.companyId - MongoDB ObjectId of the company
+ *
+ * @returns {Object} 200 - API key rotated successfully with new key
+ * @returns {Object} 404 - Company not found
+ */
+router.post('/company/:companyId/api-key/rotate', verifyCFAdminToken, async (req: Request, res: Response) => {
+  try {
+    const company = await Company.findById(req.params.companyId);
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'No company exists with the provided ID',
+      });
+    }
+
+    const previousApiKey = company.companyApiKey || null;
+    const previousApiKeyMasked = maskApiKey(previousApiKey || undefined);
+
+    // Generate a unique new API key with collision protection
+    let newApiKey = generateApiKey();
+    for (let i = 0; i < 3; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const exists = await Company.findOne({ companyApiKey: newApiKey });
+      if (!exists) break;
+      newApiKey = generateApiKey();
+    }
+
+    company.companyApiKey = newApiKey;
+    company.apiKeyActive = true;
+    await company.save();
+
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'company_api_key_rotated',
+      ...userInfo,
+      targetCompany: company._id.toString(),
+      targetCompanyName: company.companyName,
+      details: {
+        previousApiKeyMasked,
+        newApiKeyMasked: maskApiKey(newApiKey),
+      },
+      service: 'company-service',
+    }, req);
+
+    // Publish Kafka event to notify company via email
+    await publishCompanyApiKeyRotated({
+      companyId: company._id.toString(),
+      companyName: company.companyName,
+      companyEmail: company.companyEmail,
+      previousApiKeyMasked,
+      newApiKeyMasked: maskApiKey(newApiKey),
+      rotatedBy: userInfo.performedBy,
+    });
+
+    return res.status(200).json({
+      message: 'Company API key rotated successfully',
+      company: {
+        id: company._id,
+        companyName: company.companyName,
+        apiKeyActive: company.apiKeyActive,
+        apiKeyMasked: maskApiKey(newApiKey),
+        apiKey: newApiKey,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error rotating company API key:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred',
+    });
+  }
+});
+
+/**
  * Toggle API key status (active/inactive) for a company.
  * 
  * Allows CF Admins to temporarily disable a company's API key without
@@ -2006,6 +2162,70 @@ router.delete('/company/company-admin', verifyCFAdminToken, async (req: Request,
   } catch (error: any) {
     console.error('Error removing company admin:', error);
     return res.status(500).json({ message: 'Internal server error', error: error?.message || 'An unknown error occurred' });
+  }
+});
+
+/**
+ * Delete a company (CF Admin only).
+ *
+ * Permanently removes the company and its associated merchant admins and
+ * sessions from the company-service database. This is a destructive action and
+ * should typically be used only for test/sandbox merchants or when a company
+ * is fully offboarded.
+ *
+ * @route DELETE /company/:companyId
+ * @access Private (requires CF Admin JWT token)
+ *
+ * @param {string} req.params.companyId - MongoDB ObjectId of the company
+ *
+ * @returns {Object} 200 - Company deleted successfully
+ * @returns {Object} 404 - Company not found
+ */
+router.delete('/company/:companyId', verifyCFAdminToken, async (req: Request, res: Response) => {
+  try {
+    const company = await Company.findById(req.params.companyId);
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'No company exists with the provided ID',
+      });
+    }
+
+    const companyId = company._id.toString();
+    const companyName = company.companyName;
+    const companyEmail = company.companyEmail;
+
+    // Clean up related records in this service
+    await CompanyAdmin.deleteMany({ companyId });
+    await CompanyAdminSession.deleteMany({ companyId });
+    await company.deleteOne();
+
+    const userInfo = extractUserInfo(res.locals);
+    await createAuditLog({
+      action: 'company_deleted',
+      ...userInfo,
+      targetCompany: companyId,
+      targetCompanyName: companyName,
+      details: {
+        companyEmail,
+      },
+      service: 'company-service',
+    }, req);
+
+    return res.status(200).json({
+      message: 'Company deleted successfully',
+      company: {
+        id: companyId,
+        companyName,
+        companyEmail,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error deleting company:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred',
+    });
   }
 });
 

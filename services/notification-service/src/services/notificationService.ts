@@ -407,6 +407,31 @@ export const handleCompanyApiKeyStatusChanged = async (event: any) => {
   });
 };
 
+export const handleCompanyApiKeyRotated = async (event: any) => {
+  if (!event?.companyEmail) return;
+  await dispatchNotification({
+    category: 'company-api-key',
+    trigger: 'kafka:company_api_key_rotated',
+    to: event.companyEmail,
+    subject: 'Your API key has been rotated',
+    preheader: 'Important: Update your integrations',
+    intro: `Your API key for ${event.companyName} has been rotated for security reasons.`,
+    html: `
+      <p><strong>Action Required:</strong> You must update all your integrations with the new API key immediately. The previous key is no longer valid and will stop working.</p>
+      ${buildDetailsTable([
+        { label: 'Company', value: event.companyName },
+        { label: 'Previous Key (masked)', value: event.previousApiKeyMasked || 'N/A' },
+        { label: 'New Key (masked)', value: event.newApiKeyMasked || 'N/A' },
+        { label: 'Rotated By', value: event.rotatedBy || 'System Administrator' },
+      ])}
+      <p style="margin-top: 20px; padding: 12px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
+        <strong>⚠️ Important:</strong> Contact your Connect Fulfillment administrator to retrieve your new API key. Store it securely and update all systems that use the API key.
+      </p>
+    `,
+    meta: event,
+  });
+};
+
 export const handleCompanyStatusChanged = async (event: any) => {
   if (!event?.companyEmail) return;
   await dispatchNotification({

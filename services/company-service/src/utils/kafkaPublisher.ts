@@ -100,6 +100,15 @@ export const publishCompanyAdminRemoved = async (payload: {
   removedBy: { adminEmail: string; adminName?: string };
 }) => sendEvent('company_admin_removed', payload);
 
+export const publishCompanyApiKeyRotated = async (payload: {
+  companyId: string;
+  companyName: string;
+  companyEmail: string;
+  previousApiKeyMasked: string;
+  newApiKeyMasked: string;
+  rotatedBy?: string;
+}) => sendEvent('company_api_key_rotated', payload);
+
 export const disconnectCompanyKafka = async () => {
   if (!isConnected) return;
   try {

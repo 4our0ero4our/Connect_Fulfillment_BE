@@ -77,29 +77,45 @@ export const verifyCompanyAdminToken = async (req: Request, res: Response, next:
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
 
-    // Verify company exists and is verified
-    try {
-      const company = await fetchCompanyByApiKey(decoded.companyApiKey);
+      // Verify company exists and is verified and active
+      try {
+        const company = await fetchCompanyByApiKey(decoded.companyApiKey);
 
-      if (!company) {
-        return res.status(403).json({
-          message: 'Access denied',
-          error: 'Company not found, not verified, or inactive'
-        });
-      }
+        if (!company) {
+          return res.status(403).json({
+            message: 'Access denied',
+            error: 'Company not found, not verified, or inactive'
+          });
+        }
 
-      // Verify admin exists in company
-      const adminExists = (company.companyAdminIDDetails || []).find(
-        (admin: { companyAdminEmail: string }) => 
-          admin.companyAdminEmail?.toLowerCase() === decoded.companyAdminEmail?.toLowerCase()
-      );
+        // Verify company is verified
+        if (!company.isVerified) {
+          return res.status(403).json({
+            message: 'Access denied',
+            error: 'Company is not verified. Please contact Connect Fulfillment support.'
+          });
+        }
 
-      if (!adminExists) {
-        return res.status(403).json({
-          message: 'Access denied',
-          error: 'Company admin not found'
-        });
-      }
+        // Verify company is active
+        if (!company.isActive) {
+          return res.status(403).json({
+            message: 'Access denied',
+            error: 'Company account is deactivated. Please contact Connect Fulfillment support.'
+          });
+        }
+
+        // Verify admin exists in company
+        const adminExists = (company.companyAdminIDDetails || []).find(
+          (admin: { companyAdminEmail: string }) => 
+            admin.companyAdminEmail?.toLowerCase() === decoded.companyAdminEmail?.toLowerCase()
+        );
+
+        if (!adminExists) {
+          return res.status(403).json({
+            message: 'Access denied',
+            error: 'Company admin not found'
+          });
+        }
 
       res.locals.isCompanyAdmin = true;
       res.locals.companyId = company._id?.toString() || company.id?.toString();
