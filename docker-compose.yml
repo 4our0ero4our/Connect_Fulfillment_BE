@@ -149,6 +149,7 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
       - COMPANY_PORTAL_URL=${COMPANY_PORTAL_URL}
+      - COMPANY_ADMIN_ACCESS_TOKEN_MINUTES=180
     depends_on:
       mongodb:
         condition: service_started

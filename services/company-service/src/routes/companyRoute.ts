@@ -76,7 +76,7 @@ const toPositiveNumber = (value: string | undefined, fallback: number): number =
 
 const ACCESS_TOKEN_COOKIE_NAME = process.env.COMPANY_ADMIN_ACCESS_COOKIE_NAME || 'ffm_access';
 const REFRESH_TOKEN_COOKIE_NAME = process.env.COMPANY_ADMIN_REFRESH_COOKIE_NAME || 'ffm_refresh';
-const ACCESS_TOKEN_TTL_MINUTES = toPositiveNumber(process.env.COMPANY_ADMIN_ACCESS_TOKEN_MINUTES, 15);
+const ACCESS_TOKEN_TTL_MINUTES = toPositiveNumber(process.env.COMPANY_ADMIN_ACCESS_TOKEN_MINUTES, 180);
 const REFRESH_TOKEN_TTL_DAYS = toPositiveNumber(process.env.COMPANY_ADMIN_REFRESH_TOKEN_DAYS, 7);
 const ACCESS_TOKEN_TTL_MS = ACCESS_TOKEN_TTL_MINUTES * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000;
