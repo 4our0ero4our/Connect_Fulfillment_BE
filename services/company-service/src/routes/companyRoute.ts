@@ -1112,6 +1112,64 @@ router.get('/company-admin/verify-token', async (req: Request, res: Response) =>
 });
 
 /**
+ * Get company API key information (Company Admin only).
+ * 
+ * Returns both masked and unmasked API key for the authenticated company admin.
+ * Only accessible to company admins for their own company. Useful for displaying
+ * API key in the company admin dashboard.
+ * 
+ * @route GET /company-admin/api-key
+ * @access Private (requires Company Admin JWT token)
+ * 
+ * @returns {Object} 200 - API key information (masked and unmasked)
+ * @returns {Object} 403 - Access denied (company not verified or inactive)
+ * @returns {Object} 404 - Company not found
+ */
+router.get('/company-admin/api-key', verifyCompanyAdminToken, async (req: Request, res: Response) => {
+  try {
+    const companyId = res.locals.companyId;
+    const company = await Company.findById(companyId).select('companyApiKey apiKeyActive isVerified isActive');
+
+    if (!company) {
+      return res.status(404).json({
+        message: 'Company not found',
+        error: 'Your company was not found in the system'
+      });
+    }
+
+    // Ensure company is verified and active
+    if (!company.isVerified || !company.isActive) {
+      return res.status(403).json({
+        message: 'Access denied',
+        error: 'Your company must be verified and active to view API key information'
+      });
+    }
+
+    if (!company.companyApiKey) {
+      return res.status(404).json({
+        message: 'API key not found',
+        error: 'Company API key not found. Please contact support.'
+      });
+    }
+
+    return res.status(200).json({
+      message: 'API key retrieved successfully',
+      apiKey: company.companyApiKey,
+      apiKeyMasked: maskApiKey(company.companyApiKey),
+      apiKeyActive: company.apiKeyActive,
+      companyId: company._id.toString(),
+      companyName: res.locals.companyName,
+    });
+  } catch (error: any) {
+    console.error('Error fetching API key:', error);
+    return res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
+});
+
+/**
  * Verify if a company API key is valid.
  * 
  * Used by the API Gateway to validate API keys on each request. Returns
