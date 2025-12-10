@@ -49,7 +49,7 @@ const CompanySchema: Schema = new Schema<ICompany>(
     companyName: { type: String, required: true },
     companyEmail: { type: String, required: true, unique: true, lowercase: true, match: [/^\S+@\S+\.\S+$/, 'Please enter a valid email address'] },
     companyAddress: { type: String, required: true },
-    companyPhone: { type: Number, required: true, unique: true, match: [/^\d{10}$/, 'Please enter a valid 10-digit phone number'] },
+    companyPhone: { type: Number, required: true, unique: true, match: [/^\d+$/, 'Please enter a valid phone number without any spaces or special characters'] },
     companyWebsite: { type: String, required: true, match: [/^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?$/, 'Please enter a valid website URL'] },
     companyLogo: { type: String, required: true, match: [/^(http|https):\/\/.+\.(jpg|jpeg|png|gif|bmp|tiff|ico|webp|svg|heic|heif)$/i, 'Please upload a valid image file'] },
     companyDescription: { type: String, required: true, minlength: 10, maxlength: 1000 },

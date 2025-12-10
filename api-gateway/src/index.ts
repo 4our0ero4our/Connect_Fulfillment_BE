@@ -1,4 +1,4 @@
-import express, { NextFunction } from 'express';
+import express from 'express';
 import { createProxyMiddleware, RequestHandler } from 'http-proxy-middleware';
 import { Request, Response } from 'express';
 import cookieParser from 'cookie-parser';

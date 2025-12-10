@@ -419,6 +419,23 @@ router.post('/login', rateLimit(5, 60, 'login'), async (req: Request, res: Respo
 
     setCFAdminCookies(res, token, refreshToken);
 
+    // Normalize email safely for audit logging (handles possible undefined in types)
+    const loginEmail = (admin.adminEmail || adminEmail).toLowerCase();
+
+    // Create audit log for successful login
+    await createAuditLog({
+      action: 'login',
+      performedBy: loginEmail,
+      performedByRole: 'cf_admin',
+      performedById: admin._id.toString(),
+      performedByName: admin.adminName,
+      details: {
+        loginAt: new Date().toISOString(),
+        ipAddress: req.ip
+      },
+      service: 'auth-service',
+    }, req);
+
     res.status(200).json({
       message: 'Login successful',
       admin: {
@@ -575,28 +592,53 @@ router.get('/logout', verifyCFAdminToken, async (req: Request, res: Response) =>
  * Get the profile of the currently authenticated Connect Fulfillment admin.
  * 
  * Returns admin details extracted from the JWT token, including permissions
- * and role information for dashboard display.
+ * and role information for dashboard display. Fetches staff information from
+ * the database to determine if the admin is a lead admin.
  * 
  * @route GET /profile
  * @access Private (requires CF Admin JWT token)
  * 
  * @returns {Object} 200 - Admin profile with id, name, email, role, permissions, and timestamps
  */
-router.get('/profile', verifyCFAdminToken, (req: Request, res: Response) => {
+router.get('/profile', verifyCFAdminToken, async (req: Request, res: Response) => {
+  try {
+    const adminEmail = req.body.adminEmail?.toLowerCase();
+    
+    if (!adminEmail) {
+      return res.status(400).json({
+        message: 'Admin email not found',
+        error: 'Unable to retrieve admin email from token'
+      });
+    }
+
+    // Fetch staff information from the database to get role and permissions
+    const staffsCollection = mongoose.connection.collection('staffs');
+    const staff = await staffsCollection.findOne({ email: adminEmail });
+
+    // Get admin information from Admin collection
+    const admin = await Admin.findOne({ adminEmail: adminEmail });
+
   res.json({
     message: 'Admin profile',
     admin: {
-      id: req.body.adminId,
-      adminName: req.body.adminName,
-      adminEmail: req.body.adminEmail,
-      // Added these in case we need to display those details in the frontend
-      role: req.body.role,
-      canBeCFAdmin: req.body.canBeCFAdmin,
-      isALeadCFAdmin: req.body.isALeadCFAdmin,
-      createdAt: req.body.createdAt,
-      updatedAt: req.body.updatedAt
+        id: req.body.adminId || admin?._id,
+        adminName: req.body.adminName || admin?.adminName,
+        adminEmail: adminEmail,
+        // Staff information from staffs collection
+        role: staff?.role || null,
+        canBeCFAdmin: staff?.canBeCFAdmin || false,
+        isALeadCFAdmin: staff?.isALeadCFAdmin || false,
+        createdAt: staff?.createdAt || admin?.createdAt || null,
+        updatedAt: staff?.updatedAt || admin?.updatedAt || null
     }
   });
+  } catch (error: any) {
+    console.error('Error fetching admin profile:', error);
+    res.status(500).json({
+      message: 'Internal server error',
+      error: 'Failed to retrieve admin profile'
+    });
+  }
 });
 
 /**
@@ -1013,22 +1055,39 @@ router.delete('/delete-staff', rateLimit(5, 60, 'delete-staff'), verifyCFAdminTo
 router.get('/get-all-staffs', rateLimit(5, 60, 'get-all-staffs'), verifyCFAdminToken, verifyLeadCFAdmin, async (_req: Request, res: Response): Promise<Response> => {
   try {
     const staffs = await Staff.find();
-    if (!staffs) {
+    if (!staffs || staffs.length === 0) {
       return res.status(404).json({
         message: 'No staffs found',
         error: 'No staffs were found in the database'
       });
     }
-    const staffResponse = staffs.map((staff) => staff.toObject());
+    const staffResponse = staffs.map((staff) => {
+      const staffObj = staff.toObject();
+      // Determine admin status for easier frontend display
+      let adminStatus: string;
+      if (staffObj.isALeadCFAdmin) {
+        adminStatus = 'lead_admin';
+      } else if (staffObj.canBeCFAdmin) {
+        adminStatus = 'admin';
+      } else {
+        adminStatus = 'staff';
+      }
+      
+      return {
+        id: staffObj._id,
+        name: staffObj.name,
+        email: staffObj.email,
+        role: staffObj.role,
+        canBeCFAdmin: staffObj.canBeCFAdmin,
+        isALeadCFAdmin: staffObj.isALeadCFAdmin,
+        adminStatus: adminStatus, // 'staff', 'admin', or 'lead_admin'
+        createdAt: staffObj.createdAt,
+        updatedAt: staffObj.updatedAt
+      };
+    });
     return res.status(200).json({
-      message: 'All staffs fetched successfully', staffs: staffResponse.map((staff) => ({
-        id: staff._id,
-        name: staff.name,
-        email: staff.email,
-        role: staff.role,
-        canBeCFAdmin: staff.canBeCFAdmin,
-        isALeadCFAdmin: staff.isALeadCFAdmin,
-      }))
+      message: 'All staffs fetched successfully',
+      staffs: staffResponse
     });
   } catch (error: any) {
     console.error('Error fetching all staffs:', error);

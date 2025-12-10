@@ -734,17 +734,66 @@ router.get('/company/:companyId', verifyCFAdminToken, async (req: Request, res: 
 /**
  * Get all registered companies (CF Admin only).
  * 
- * Returns a list of all company names in the system. Only CF Admins can
- * access this endpoint. For full company details, use the GET /company/:companyId endpoint.
+ * Returns a list of all companies with their basic details and admin information.
+ * Only CF Admins can access this endpoint. For full company details including
+ * API keys and settings, use the GET /company/:companyId endpoint.
  * 
  * @route GET /companies
  * @access Private (requires CF Admin JWT token)
  * 
- * @returns {Object} 200 - List of all company names
+ * @returns {Object} 200 - List of all companies with admin details
  */
 router.get('/companies', verifyCFAdminToken, async (_req: Request, res: Response) => {
-  const companyNames = await Company.find({}, 'companyName');
-  res.status(200).json({ companyNames });
+  try {
+    const companies = await Company.find({}).select('-companyApiKey -companyAdminIDDetails.companyAdminPassword');
+    
+    const companiesWithAdmins = companies.map((company) => {
+      const companyObj = company.toObject();
+      
+      // Extract admin details (excluding passwords)
+      const adminDetails = (companyObj.companyAdminIDDetails || []).map((admin: any) => ({
+        name: admin.companyAdminName,
+        email: admin.companyAdminEmail
+        // Password is excluded via select
+      }));
+      
+      return {
+        id: companyObj._id,
+        companyName: companyObj.companyName,
+        companyEmail: companyObj.companyEmail,
+        companyAddress: companyObj.companyAddress,
+        companyPhone: companyObj.companyPhone,
+        companyWebsite: companyObj.companyWebsite,
+        companyLogo: companyObj.companyLogo,
+        companyDescription: companyObj.companyDescription,
+        companyCategory: companyObj.companyCategory,
+        companySubCategory: companyObj.companySubCategory,
+        isVerified: companyObj.isVerified,
+        isActive: companyObj.isActive,
+        isServiceActive: companyObj.isServiceActive,
+        apiKeyActive: companyObj.apiKeyActive,
+        deliveryTimeHours: companyObj.deliveryTimeHours,
+        // Admin information
+        companyAdminEmails: companyObj.companyAdminEmails || [],
+        adminDetails: adminDetails,
+        adminCount: (companyObj.companyAdminEmails || []).length,
+        createdAt: companyObj.createdAt,
+        updatedAt: companyObj.updatedAt
+      };
+    });
+    
+    res.status(200).json({
+      message: 'Companies retrieved successfully',
+      companies: companiesWithAdmins,
+      total: companiesWithAdmins.length
+    });
+  } catch (error: any) {
+    console.error('Error fetching companies:', error);
+    res.status(500).json({
+      message: 'Internal server error',
+      error: error?.message || 'An unknown error occurred'
+    });
+  }
 });
 
 router.post('/company-admin/refresh-token', async (req: Request, res: Response) => {
