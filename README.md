@@ -1,4 +1,4 @@
-# FulfillMate - Backend API (For any dev that has the chance to view this, lol)
+# FulfillMate - Backend API
 
 A multi-tenant B2B fulfillment platform backend built with microservices architecture.
 
